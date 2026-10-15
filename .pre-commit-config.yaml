@@ -1,0 +1,72 @@
+# Run with prek (a dev dependency): `uv run prek install` once per clone.
+# The config is plain pre-commit syntax, so `pre-commit` can run it unchanged.
+# Local hooks go through `uv run --locked` so hook tools are the exact versions in
+# uv.lock, the same ones CI runs.
+
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+
+# The vivi skills are byte-for-byte copies of the pinned release, so fixers must
+# leave them alone.
+exclude: ^\.agents/skills/(vivi|tugboat|speedboat)/
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-yaml
+      - id: destroyed-symlinks
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  - repo: local
+    hooks:
+      - id: uv-lock-check
+        name: uv.lock is current
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --locked ruff format
+        language: system
+        types: [python]
+        require_serial: true
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --locked ruff check --fix --force-exclude
+        language: system
+        types: [python]
+        require_serial: true
+      - id: shellcheck
+        name: shellcheck
+        entry: uv run --locked shellcheck
+        language: system
+        types: [shell]
+      - id: pyright
+        name: pyright
+        entry: uv run --locked pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
+      - id: pytest
+        name: pytest
+        entry: uv run --locked pytest
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]

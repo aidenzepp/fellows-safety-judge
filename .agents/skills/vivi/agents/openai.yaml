@@ -1,0 +1,3 @@
+display_name: Vivi
+short_description: Project mailspaces, roles, goals, work graphs, and the remote lane pool through the Vivi CLI.
+default_prompt: Use this skill for the Vivi project-mailspace CLI. Verify the live `vivi` surface first; do not read or write `.vivi/` storage directly.

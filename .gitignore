@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+# Environment files: only .env.example is tracked
+.env
+.env.*
+!.env.example
+
+# vivi mailspace: local state, never committed
+.vivi/
+
+# OS and editor
+.DS_Store

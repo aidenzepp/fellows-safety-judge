@@ -1,0 +1,4 @@
+interface:
+  display_name: "Type Design"
+  short_description: "Build narrow, derived, domain-owned Python models"
+  default_prompt: "Use $type-design to review these Python data models and boundaries. Reuse or derive from the semantic owner, constrain invalid values at the highest input that can establish them, and preserve identity, state, error, and absence semantics through the stack."

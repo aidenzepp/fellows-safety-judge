@@ -1,0 +1,114 @@
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "safety-judge"
+version = "0.1.0"
+description = "Skeleton for an LLM-as-judge safety evaluation research project."
+readme = "README.md"
+requires-python = ">=3.15,<3.16"
+classifiers = ["Private :: Do Not Upload"]
+dependencies = [
+    "pydantic>=2.14.1,<3",
+    "pydantic-settings>=2.16.0,<3",
+]
+
+# Tools are pinned exactly: their diagnostics change between releases, so an
+# upgrade is a deliberate commit that also fixes whatever it newly reports.
+[dependency-groups]
+dev = [
+    "prek==0.5.5",
+    "pyright==1.1.414",
+    "pytest==9.1.1",
+    "ruff==0.17.0",
+    "shellcheck-py==0.11.0.1",
+]
+
+[tool.uv]
+required-version = ">=0.13.1"
+python-preference = "only-managed"
+
+[tool.uv.build-backend]
+module-name = "safety_judge"
+module-root = "src"
+
+[tool.pytest]
+minversion = "9.1"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-config", "--strict-markers", "--import-mode=importlib"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.pyright]
+pythonVersion = "3.15"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+exclude = ["**/__pycache__", ".agents", ".venv"]
+venvPath = "."
+venv = ".venv"
+# Only `# pyright: ignore[rule]` suppresses a diagnostic, so every suppression
+# names the rule it silences and stale ones are reported.
+enableTypeIgnoreComments = false
+deprecateTypingAliases = true
+reportImplicitOverride = "error"
+reportImportCycles = "error"
+reportMissingSuperCall = "error"
+reportPropertyTypeMismatch = "error"
+reportUninitializedInstanceVariable = "error"
+reportUnnecessaryTypeIgnoreComment = "error"
+reportCallInDefaultInitializer = "error"
+reportUnusedCallResult = "error"
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+# Vendored agent skills are upstream files and are not linted or reformatted.
+extend-exclude = [".agents"]
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.ruff.lint]
+select = ["ALL"]
+# Preview rules are selected by exact code only. These pydoclint rules enforce
+# complete Args, Returns, and Raises sections, as the document-code skill requires.
+preview = true
+explicit-preview-rules = true
+extend-select = ["DOC201", "DOC202", "DOC402", "DOC403", "DOC501", "DOC502"]
+ignore = [
+    "COM812", # Conflicts with the formatter's trailing-comma handling.
+    "CPY001", # A private repository carries no per-file copyright headers.
+    "ISC001", # Conflicts with the formatter's string joining.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "D100", # Tests state their contract in test names, not docstrings.
+    "D101", # Tests state their contract in test names, not docstrings.
+    "D102", # Tests state their contract in test names, not docstrings.
+    "D103", # Tests state their contract in test names, not docstrings.
+    "D104", # Tests state their contract in test names, not docstrings.
+    "INP001", # Tests are imported by path (importlib mode), so no __init__.py exists.
+    "PLR2004", # A literal expected value is the clearest assertion in a test.
+    "S101", # Assertions are how pytest tests state expectations.
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 88
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "pydantic_settings.BaseSettings",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["safety_judge"]

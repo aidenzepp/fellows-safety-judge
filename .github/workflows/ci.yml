@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Format, lint, type check, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          enable-cache: true
+
+      - name: Install the locked environment
+        run: uv sync --locked
+
+      - name: Format check
+        if: ${{ !cancelled() }}
+        run: uv run --locked ruff format --check
+
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: uv run --locked ruff check
+
+      - name: Type check
+        if: ${{ !cancelled() }}
+        run: uv run --locked pyright
+
+      - name: Test
+        if: ${{ !cancelled() }}
+        run: uv run --locked pytest
+
+      - name: Shellcheck the vivi bootstrap script
+        if: ${{ !cancelled() }}
+        run: uv run --locked shellcheck tools/setup-vivi.sh

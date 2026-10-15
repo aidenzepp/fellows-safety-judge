@@ -1,0 +1,4 @@
+interface:
+  display_name: "Function Decomposition"
+  short_description: "Shape scannable functions around coherent responsibilities"
+  default_prompt: "Use $function-decomposition to review these Python functions and shape private, explicitly parameterized boundaries that make each workflow easy to scan without adding unnecessary pass-through helpers or public names."
