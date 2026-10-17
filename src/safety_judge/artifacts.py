@@ -771,6 +771,15 @@ class ArtifactWriter:
         self._create_active_access()
         return self._state.create_admitted_reservations(reservations)
 
+    def create_exposure(self) -> BudgetLedger:
+        """Read compact current monetary exposure without copying full raw history.
+
+        Returns:
+            Immutable aggregate ledger, retaining reservations until settlement.
+        """
+        self._create_active_access()
+        return self._state.exposure
+
     def create_snapshot(self) -> ReplayState:
         """Copy full exact history at an explicit checkpoint, outside append loops.
 

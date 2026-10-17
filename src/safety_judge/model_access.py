@@ -7,6 +7,7 @@ The runner owns authority, reservations, retries and durable sequencing.
 
 import http.client
 import json
+import re
 from http import HTTPStatus
 from typing import Annotated, Literal, TypedDict, assert_never
 from urllib.parse import urlsplit
@@ -15,12 +16,78 @@ lazy from collections.abc import Callable
 from pydantic import BaseModel, Field, SecretStr, TypeAdapter
 
 from safety_judge.errors import ConfigurationError, InvalidValueError
-from safety_judge.judging import JudgeRole, create_unique_json_object
+from safety_judge.judging import JudgeRole, OrdinalPayload, create_unique_json_object
 lazy from safety_judge.judging import JudgeMessage, JudgeRequest
 lazy from safety_judge.settings import ApplicationSettings
 
 type ModelRole = JudgeRole | Literal["paraphraser", "reviewer"]
 """Owning judging roles plus the two explicit exploratory H2 functions."""
+
+type OutputMode = Literal["json_schema", "json_object", "prompt"]
+"""Explicit frozen provider formatting mode; no response-dependent fallback."""
+
+
+def create_ordinal_response_format(mode: OutputMode) -> dict[str, object] | None:
+    """Render the strict ordinal schema identically for every supported judge.
+
+    Args:
+        mode: Explicit schema, object-only, or unchanged prompt-only request mode.
+
+    Returns:
+        The provider response_format value, absent only for prompt-only mode.
+    """
+    if mode == "prompt":
+        return None
+    if mode == "json_object":
+        return {"type": "json_object"}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "safety_judge_ordinal",
+            "strict": True,
+            "schema": OrdinalPayload.model_json_schema(),
+        },
+    }
+
+
+def create_unsupported_output_mode(result: HttpResult) -> bool:
+    """Recognize only explicit provider rejection of the requested format feature.
+
+    Args:
+        result: Already durably saved single-attempt response or transport failure.
+
+    Returns:
+        True only for HTTP400/422 with explicit unsupported-format error evidence.
+        Billing, invalid schema syntax, unknown delivery and HTTP200 never qualify.
+    """
+    if not isinstance(result, HttpResponse) or result.status not in {400, 422}:
+        return False
+    try:
+        payload = TypeAdapter(dict[str, object]).validate_json(result.body)
+        error = payload.get("error")
+        facts = TypeAdapter(dict[str, object]).validate_python(error)
+    except ValueError:
+        return False
+    message = facts.get("message")
+    if not isinstance(message, str):
+        return False
+    text = message.lower().replace("'", "").replace('"', "")
+    if any(
+        marker in text
+        for marker in ("invalid schema", "malformed", "keyword", "syntax")
+    ):
+        return False
+    return (
+        re.search(
+            r"(?:json_schema|json_object)(?: response[_ ]format| format| mode| type)?"
+            r"(?: is|:)?[ \t]+(?:not supported|unsupported|unavailable)"
+            r"|(?:unsupported|unavailable|does not support|not support)"
+            r"(?: response[_ ]format| format| mode| type)?[: \t]+"
+            r"(?:json_schema|json_object)",
+            text,
+        )
+        is not None
+    )
 
 
 class ModelRoute(BaseModel, frozen=True, extra="forbid"):
@@ -228,6 +295,7 @@ def create_http_request(
     messages: tuple[JudgeMessage, ...],
     api_key: SecretStr,
     parameters: GenerationParameters,
+    output_mode: OutputMode = "prompt",
 ) -> HttpRequest:
     """Render a fixed nonstreaming chat request from explicit values and a secret.
 
@@ -240,6 +308,7 @@ def create_http_request(
         messages: Complete frozen visible messages for judging/rewrite/review.
         api_key: Explicit nonempty credential; synthetic values support offline work.
         parameters: Frozen complete generation controls and attempt timeout.
+        output_mode: Frozen provider formatting control, never chosen by validity.
 
     Returns:
         Serialized request with an excluded SecretStr credential.
@@ -268,6 +337,9 @@ def create_http_request(
     }
     if route.role is JudgeRole.QWEN_THIRTY_TWO:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
+    response_format = create_ordinal_response_format(output_mode)
+    if response_format is not None:
+        payload["response_format"] = response_format
     return HttpRequest(
         route=route,
         api_key=api_key,
@@ -282,6 +354,7 @@ def create_judge_http_request(
     route: ModelRoute,
     api_key: SecretStr,
     parameters: GenerationParameters,
+    output_mode: OutputMode = "prompt",
 ) -> HttpRequest:
     """Adapt the owning blinded judge request without adding source metadata.
 
@@ -292,6 +365,7 @@ def create_judge_http_request(
         route: Explicit nominal judge serving route.
         api_key: Explicit nonempty provider or synthetic offline credential.
         parameters: Frozen complete generation controls and attempt timeout.
+        output_mode: Frozen provider formatting control for this judge route.
 
     Returns:
         Provider wire request with unchanged visible messages.
@@ -301,6 +375,7 @@ def create_judge_http_request(
         messages=request.messages,
         api_key=api_key,
         parameters=parameters,
+        output_mode=output_mode,
     )
 
 

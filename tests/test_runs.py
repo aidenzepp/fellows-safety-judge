@@ -34,9 +34,11 @@ from safety_judge.model_access import (
 from safety_judge.runs import (
     SMOKE_CONTEXT_INPUTS,
     SmokeAuthorization,
+    create_mode_probe_step,
     create_saved_judgments,
     create_saved_normalized_outcomes,
     select_first_row_smoke,
+    select_output_mode_smoke,
     select_run,
     select_simulated_run,
 )
@@ -712,3 +714,118 @@ def test_live_normalized_terminals_keep_paired_raw_failures_and_immutable_journa
         for event in state.events
         if isinstance(event, TerminalEvent)
     )
+
+
+def create_mode_probe_configuration() -> StudyConfiguration:
+    return create_smoke_configuration().model_copy(
+        update={"output_modes": dict.fromkeys(JudgeRole, "json_schema")}
+    )
+
+
+def test_mode_probe_tries_all_four_before_fallback_and_retains_each_request_hash(
+    tmp_path: Path, settings: ApplicationSettings
+) -> None:
+    configuration = create_mode_probe_configuration()
+    scope = create_smoke_authorization(configuration).model_copy(
+        update={
+            "maximum_attempts_per_cell": 3,
+            "prior_arm_exposure": tuple(
+                ArmCap(arm=role, cap=cost)
+                for role, cost in (("G1", 38), ("G27", 74), ("L8", 20), ("Q32", 80))
+            ),
+        }
+    )
+    calls: list[HttpRequest] = []
+
+    def select_mode_response(request: HttpRequest) -> HttpResponse:
+        calls.append(request)
+        payload = json.loads(request.body)
+        mode = payload.get("response_format", {}).get("type", "prompt")
+        if (request.route.role == JudgeRole.GEMMA_ONE and mode != "prompt") or (
+            request.route.role == JudgeRole.LLAMA_EIGHT and mode == "json_schema"
+        ):
+            return HttpResponse(
+                status=400,
+                body=json.dumps(
+                    {"error": {"message": f"{mode} is not supported by this model"}}
+                ).encode(),
+            )
+        return create_response(request)
+
+    journal = tmp_path / "modes.jsonl"
+    state = select_output_mode_smoke(
+        configuration, journal, settings, select_mode_response, scope
+    )
+    assert len(calls) == 7
+    assert tuple(call.route.role for call in calls[:4]) == tuple(JudgeRole)
+    assert len(state.ledger.reservations) == 7
+    assert len(state.ledger.settlements) == 4
+    identities = {
+        event.assignment: event.request_sha256
+        for event in state.events
+        if isinstance(event, AttemptIntent)
+    }
+    assert len(identities) == 7
+    assert len(set(identities.values())) == 7
+    assert create_mode_probe_step(state, configuration.assignments[0]).mode == "prompt"
+    assert (
+        create_mode_probe_step(state, configuration.assignments[2]).mode
+        == "json_object"
+    )
+    assert (
+        select_output_mode_smoke(
+            configuration, journal, settings, select_mode_response, scope
+        )
+        == state
+    )
+    assert len(calls) == 7
+
+
+def test_mode_probe_never_exceeds_eight_attempts_or_starves_initial_four(
+    tmp_path: Path, settings: ApplicationSettings
+) -> None:
+    configuration = create_mode_probe_configuration()
+    scope = create_smoke_authorization(configuration).model_copy(
+        update={"maximum_attempts_per_cell": 3}
+    )
+    calls: list[HttpRequest] = []
+
+    def select_unsupported(request: HttpRequest) -> HttpResponse:
+        calls.append(request)
+        mode = json.loads(request.body).get("response_format", {}).get("type", "prompt")
+        return HttpResponse(
+            status=400,
+            body=json.dumps(
+                {"error": {"message": f"{mode} is not supported"}}
+            ).encode(),
+        )
+
+    state = select_output_mode_smoke(
+        configuration, tmp_path / "modes.jsonl", settings, select_unsupported, scope
+    )
+    assert len(calls) == 8
+    assert tuple(call.route.role for call in calls[:4]) == tuple(JudgeRole)
+    assert len(state.ledger.reservations) == 8
+    assert len(state.ledger.settlements) == 0
+
+
+def test_mode_probe_never_downgrades_for_successful_invalid_json_content(
+    tmp_path: Path, settings: ApplicationSettings
+) -> None:
+    configuration = create_mode_probe_configuration()
+    scope = create_smoke_authorization(configuration).model_copy(
+        update={"maximum_attempts_per_cell": 3}
+    )
+    calls: list[HttpRequest] = []
+
+    def select_invalid(request: HttpRequest) -> HttpResponse:
+        calls.append(request)
+        return HttpResponse(
+            status=200,
+            body=b'{"choices":[{"message":{"content":"1"},"finish_reason":"stop"}]}',
+        )
+
+    _ = select_output_mode_smoke(
+        configuration, tmp_path / "modes.jsonl", settings, select_invalid, scope
+    )
+    assert len(calls) == 4

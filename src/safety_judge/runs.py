@@ -7,7 +7,8 @@ intents and raw evidence are durable before dispatch and parsing respectively.
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from typing import Annotated, Final
+from dataclasses import dataclass
+from typing import Annotated, Final, Literal
 lazy from pathlib import Path
 
 from pydantic import BaseModel, Field, SecretStr
@@ -45,9 +46,11 @@ from safety_judge.model_access import (
     HttpResponse,
     HttpResult,
     HttpTransport,
+    OutputMode,
     create_judge_http_request,
     create_provider_api_key,
     create_provider_observation,
+    create_unsupported_output_mode,
     select_model_attempt,
 )
 from safety_judge.study import (
@@ -78,6 +81,9 @@ SMOKE_CONTEXT_INPUTS: Final = (
 SMOKE_TOTAL_CAP: Final = 100_000
 """The absolute ten-cent bound on all smoke attempt liabilities."""
 
+MODE_PROBE_MAXIMUM_ATTEMPTS: Final = 3
+"""Schema, object and prompt slots share the finite capability attempt ceiling."""
+
 SMOKE_MAXIMUM_ATTEMPTS: Final = 2
 """One initial attempt and one certified non-delivery retry per assignment."""
 
@@ -97,6 +103,7 @@ class SmokeAuthorization(BaseModel, frozen=True, extra="forbid"):
         configuration_sha256: Full source/matrix/configuration freeze being probed.
         assignment_identifiers: Exactly the first original and four roster judges.
         prior_arm_exposure: Previous smoke actual costs or retained liabilities.
+        maximum_attempts_per_cell: Frozen two-attempt or finite mode-probe ceiling.
     """
 
     confirmed: Annotated[bool, Field(strict=True)]
@@ -104,6 +111,7 @@ class SmokeAuthorization(BaseModel, frozen=True, extra="forbid"):
     configuration_sha256: ArtifactDigest
     assignment_identifiers: tuple[str, ...]
     prior_arm_exposure: tuple[ArmCap, ...] = ()
+    maximum_attempts_per_cell: Literal[2, 3] = 2
 
 
 MAXIMUM_CONSECUTIVE_TRANSPORT_FAILURES: Final = 10
@@ -184,11 +192,12 @@ def create_execution_ready(configuration: StudyConfiguration) -> None:
         raise InvalidValueError(message)
 
 
-def _create_assignment_request(
+def create_assignment_request(
     configuration: StudyConfiguration,
     assignment: RunAssignment,
     response: EligibleResponse,
     settings: ApplicationSettings | None,
+    output_mode: OutputMode | None = None,
 ) -> HttpRequest:
     """Render one blinded request from the frozen source and route owners.
 
@@ -197,6 +206,7 @@ def _create_assignment_request(
         assignment: Selected fixed original/judge cell.
         response: Already indexed accepted source record for this assignment.
         settings: Explicit parsed credentials, excluded from artifacts.
+        output_mode: Explicit bounded probe override, absent for frozen main mode.
 
     Returns:
         One wire request, granting no dispatch authority itself.
@@ -213,10 +223,13 @@ def _create_assignment_request(
         if settings is not None
         else SecretStr("synthetic-offline-no-network"),
         parameters=configuration.parameters,
+        output_mode=output_mode
+        if output_mode is not None
+        else configuration.output_modes.get(assignment.judge, "prompt"),
     )
 
 
-def _insert_attempt_result(
+def insert_attempt_result(
     writer: ArtifactWriter,
     attempt: str,
     result: HttpResult,
@@ -251,7 +264,7 @@ def _insert_attempt_result(
     writer.insert_event(TerminalEvent(attempt=attempt, outcome=outcome))
 
 
-def _insert_usage_settlement(
+def insert_usage_settlement(
     writer: ArtifactWriter,
     configuration: StudyConfiguration,
     assignment: RunAssignment,
@@ -310,7 +323,7 @@ def _insert_usage_settlement(
     )
 
 
-def _create_resumable_attempts(state: ReplayState) -> dict[str, int]:
+def create_resumable_attempts(state: ReplayState) -> dict[str, int]:
     """Index certified retry eligibility once, retaining all crash-window intents.
 
     Args:
@@ -362,7 +375,7 @@ def create_transport_failure_state(state: ReplayState) -> tuple[int, bool]:
     return failures, stopped
 
 
-def _insert_resumed_terminals(writer: ArtifactWriter) -> None:
+def insert_resumed_terminals(writer: ArtifactWriter) -> None:
     """Resolve saved raw evidence locally and preserve interrupted intents occupied.
 
     Args:
@@ -451,6 +464,27 @@ def create_saved_normalized_outcomes(
     return outcomes
 
 
+def create_mode_probe_assignment(identifier: str, scope: SmokeAuthorization) -> str:
+    """Resolve only the explicitly authorized capability-mode namespace.
+
+    Ordinary assignment/hash invariants remain unchanged. The probe's three
+    mode identities retain distinct request hashes and never enter main analysis.
+
+    Args:
+        identifier: Reservation assignment identity before its attempt suffix.
+        scope: Explicit two-attempt smoke or three-slot mode-probe authority.
+
+    Returns:
+        Original cell only for an exact authorized schema/object/prompt namespace.
+    """
+    if scope.maximum_attempts_per_cell == MODE_PROBE_MAXIMUM_ATTEMPTS:
+        for mode in ("json_schema", "json_object", "prompt"):
+            suffix = f":mode:{mode}"
+            if identifier.endswith(suffix):
+                return identifier.removesuffix(suffix)
+    return identifier
+
+
 def create_smoke_admission(
     state: ReplayState,
     reservations: tuple[CallReservation, ...],
@@ -475,6 +509,7 @@ def create_smoke_admission(
     attempts: dict[str, int] = {}
     for item in (*state.ledger.reservations, *reservations):
         assignment = item.attempt.rsplit(":attempt:", 1)[0]
+        assignment = create_mode_probe_assignment(assignment, scope)
         if assignment not in scope.assignment_identifiers:
             message = (
                 "Smoke journal contains another assignment; reconcile without dispatch."
@@ -486,7 +521,8 @@ def create_smoke_admission(
         )
     caps = dict(SMOKE_ARM_CAPS)
     if (
-        any(count > SMOKE_MAXIMUM_ATTEMPTS for count in attempts.values())
+        any(count > scope.maximum_attempts_per_cell for count in attempts.values())
+        or sum(attempts.values()) > len(SMOKE_ARM_CAPS) * SMOKE_MAXIMUM_ATTEMPTS
         or any(arm not in caps or amount > caps[arm] for arm, amount in totals.items())
         or sum(totals.values()) > SMOKE_TOTAL_CAP
     ):
@@ -624,10 +660,10 @@ def _select_run(
     with select_artifact_writer(
         journal, create_run_manifest(configuration), secrets=secrets
     ) as writer:
-        _insert_resumed_terminals(writer)
+        insert_resumed_terminals(writer)
         initial_state = writer.create_snapshot()
         _create_dispatch_admission(writer, (), scope)
-        next_attempts = _create_resumable_attempts(initial_state)
+        next_attempts = create_resumable_attempts(initial_state)
         failures, stopped = create_transport_failure_state(initial_state)
         responses = {row.identifier: row for row in configuration.responses}
         with ThreadPoolExecutor(max_workers=configuration.maximum_workers) as executor:
@@ -646,7 +682,7 @@ def _select_run(
                     if not pending:
                         break
                     requests = tuple(
-                        _create_assignment_request(
+                        create_assignment_request(
                             configuration,
                             item,
                             responses[item.response_identifier],
@@ -705,10 +741,10 @@ def _select_run(
                                 and next_attempts.get(item.identifier, 1) == 1
                                 else 0
                             )
-                            _insert_attempt_result(
+                            insert_attempt_result(
                                 writer, reservation.attempt, result, secrets
                             )
-                            _insert_usage_settlement(
+                            insert_usage_settlement(
                                 writer, configuration, item, reservation.attempt, result
                             )
         return writer.create_snapshot()
@@ -734,6 +770,9 @@ def select_run(
     Raises:
         InvalidValueError: If simulation mode or source support fails live admission.
     """
+    if configuration.main_policy is not None:
+        message = "Controlled main requires select_controlled_main and its monitor."
+        raise InvalidValueError(message)
     if configuration.execution_mode != "live":
         message = "Simulation cannot select a live edge; use the mock workflow."
         raise InvalidValueError(message)
@@ -795,3 +834,228 @@ def select_simulated_run(
         )
         raise InvalidValueError(message)
     return _select_run(configuration, journal, None, _create_simulated_response)
+
+
+class ModeProbeStep(BaseModel, frozen=True, extra="forbid"):
+    """Deterministic capability step independent of ordinal validity.
+
+    Attributes:
+        mode: Current or next format mode in the frozen schema/object/prompt order.
+        number: Next ordinal, absent after an occupied or exhausted response.
+    """
+
+    mode: OutputMode
+    number: int | None
+
+
+def create_mode_probe_step(
+    state: ReplayState, assignment: RunAssignment
+) -> ModeProbeStep:
+    """Replay finite format fallbacks and one certified transport retry per cell.
+
+    Args:
+        state: Full durable probe evidence, including unreceived intents.
+        assignment: Fixed first-original judge cell, never a replacement model.
+
+    Returns:
+        Next capability step, or an occupied/exhausted terminal without resending.
+
+    Raises:
+        InvalidValueError: If saved capability identities violate the frozen order.
+    """
+    intents = tuple(
+        event
+        for event in state.events
+        if isinstance(event, AttemptIntent)
+        and event.assignment
+        in {
+            f"{assignment.identifier}:mode:{mode}"
+            for mode in ("json_schema", "json_object", "prompt")
+        }
+    )
+    raw = {
+        event.attempt: event
+        for event in state.events
+        if isinstance(event, RawResponseEvent)
+    }
+    mode: OutputMode = "json_schema"
+    certified_retry_used = False
+    for intent in intents:
+        if intent.assignment != f"{assignment.identifier}:mode:{mode}":
+            message = "Capability mode sequence differs; reconcile without dispatch."
+            raise InvalidValueError(message)
+        event = raw.get(intent.reservation.attempt)
+        if event is None or event.redacted:
+            return ModeProbeStep(mode=mode, number=None)
+        if event.status is not None and create_unsupported_output_mode(
+            HttpResponse(status=event.status, body=create_raw_body(event))
+        ):
+            if mode == "prompt":
+                return ModeProbeStep(mode=mode, number=None)
+            mode = "json_object" if mode == "json_schema" else "prompt"
+        elif event.delivery == "not_delivered" and not certified_retry_used:
+            certified_retry_used = True
+        else:
+            return ModeProbeStep(mode=mode, number=None)
+    return ModeProbeStep(
+        mode=mode,
+        number=len(intents) + 1 if len(intents) < MODE_PROBE_MAXIMUM_ATTEMPTS else None,
+    )
+
+
+def _create_probe_reservation(
+    configuration: StudyConfiguration, assignment: RunAssignment, number: int
+) -> CallReservation:
+    """Construct a full-context probe liability before any one-attempt dispatch.
+
+    Args:
+        configuration: Frozen full source, rates and output bound.
+        assignment: Exact fixed cell with its conservative input envelope.
+        number: Distinct attempt ordinal across mode fallbacks and certified retry.
+
+    Returns:
+        One still-unadmitted worst-case reservation.
+    """
+    return create_call_reservation(
+        attempt=f"{assignment.identifier}:attempt:{number}",
+        arm=assignment.judge.value,
+        price=configuration.prices[assignment.judge],
+        maximum_input_tokens=assignment.maximum_input_tokens or 0,
+        maximum_output_tokens=configuration.parameters.maximum_output_tokens,
+    )
+
+
+@dataclass(frozen=True)
+class ModeProbeCapabilities:
+    """Explicit injected authority and edges for the finite four-cell probe.
+
+    Attributes:
+        configuration: Full source/matrix, rates and request freeze.
+        settings: Already parsed credentials, never serialized.
+        transport: Exactly one HTTP attempt, never an SDK fallback.
+        scope: Cumulative caps and fixed finite mode-attempt authority.
+        secrets: Every credential supplied to durable raw redaction.
+    """
+
+    configuration: StudyConfiguration
+    settings: ApplicationSettings
+    transport: HttpTransport
+    scope: SmokeAuthorization
+    secrets: tuple[SecretStr, ...]
+
+
+def select_output_mode_smoke(
+    configuration: StudyConfiguration,
+    journal: Path,
+    settings: ApplicationSettings,
+    transport: HttpTransport,
+    scope: SmokeAuthorization,
+) -> ReplayState:
+    """Probe four schema modes with at most eight total charged HTTP attempts.
+
+    Only explicit unsupported-format errors permit schema/object/prompt fallback.
+    HTTP200 invalid ordinals, billing, cold-model errors and uncertain delivery do
+    not permit another capability attempt. Every raw/intent/liability is durable.
+
+    Args:
+        configuration: Full matrix with all four initial modes frozen to json_schema.
+        journal: Separate versioned capability journal, never an old smoke overwrite.
+        settings: Already parsed credentials, excluded from frozen evidence.
+        transport: Existing single-POST capability, or deterministic offline fake.
+        scope: Exact admission with prior smoke costs and a three-slot cell ceiling.
+
+    Returns:
+        Complete checkpoint with no more than four cells/eight total attempts.
+
+    Raises:
+        InvalidValueError: If initial modes or capability attempt scope differ.
+    """
+    create_smoke_ready(configuration, scope)
+    if (
+        scope.maximum_attempts_per_cell != MODE_PROBE_MAXIMUM_ATTEMPTS
+        or set(configuration.output_modes.values()) != {"json_schema"}
+        or set(configuration.output_modes) != set(configuration.prices)
+    ):
+        message = "Mode-probe freeze differs; restore all four schema modes and scope."
+        raise InvalidValueError(message)
+    secrets = tuple(
+        secret
+        for secret in (settings.deepinfra_api_key, settings.huggingface_api_key)
+        if secret is not None
+    )
+    capabilities = ModeProbeCapabilities(
+        configuration, settings, transport, scope, secrets
+    )
+    responses = {row.identifier: row for row in configuration.responses}
+    with select_artifact_writer(
+        journal, create_run_manifest(configuration), secrets=secrets
+    ) as writer:
+        insert_resumed_terminals(writer)
+        _create_dispatch_admission(writer, (), scope)
+        initial_state = writer.create_snapshot()
+        reservations = tuple(
+            _create_probe_reservation(configuration, assignment, step.number)
+            for assignment in configuration.assignments[: len(SMOKE_ARM_CAPS)]
+            if (step := create_mode_probe_step(initial_state, assignment)).number == 1
+        )
+        _create_dispatch_admission(writer, reservations, scope)
+        for maximum_steps in (1, scope.maximum_attempts_per_cell):
+            for assignment in configuration.assignments[: len(SMOKE_ARM_CAPS)]:
+                _select_mode_probe_cell(
+                    writer,
+                    capabilities,
+                    assignment,
+                    responses[assignment.response_identifier],
+                    maximum_steps,
+                )
+        return writer.create_snapshot()
+
+
+def _select_mode_probe_cell(
+    writer: ArtifactWriter,
+    capabilities: ModeProbeCapabilities,
+    assignment: RunAssignment,
+    response: EligibleResponse,
+    maximum_steps: int,
+) -> None:
+    """Execute only the next explicitly supported finite capability transition.
+
+    Args:
+        writer: Exclusive durable owner retaining all charged attempt liabilities.
+        capabilities: Frozen scope, configuration and explicitly injected edges.
+        assignment: Fixed cell, with no source/model replacement.
+        response: Exact original visible source text.
+        maximum_steps: One for the all-four initial pass, then remaining slot limit.
+    """
+    configuration = capabilities.configuration
+    scope = capabilities.scope
+    for _ in range(maximum_steps):
+        state = writer.create_snapshot()
+        step = create_mode_probe_step(state, assignment)
+        if (
+            step.number is None
+            or len(state.ledger.reservations)
+            >= len(SMOKE_ARM_CAPS) * SMOKE_MAXIMUM_ATTEMPTS
+        ):
+            return
+        request = create_assignment_request(
+            configuration, assignment, response, capabilities.settings, step.mode
+        )
+        reservation = _create_probe_reservation(configuration, assignment, step.number)
+        mode_assignment = f"{assignment.identifier}:mode:{step.mode}"
+        reservation = reservation.model_copy(
+            update={"attempt": f"{mode_assignment}:attempt:{step.number}"}
+        )
+        _create_dispatch_admission(writer, (reservation,), scope)
+        writer.insert_event(
+            AttemptIntent(
+                assignment=mode_assignment,
+                reservation=reservation,
+                request_sha256=create_artifact_digest(request.body),
+            )
+        )
+        result = select_model_attempt(request, capabilities.transport)
+        insert_attempt_result(writer, reservation.attempt, result, capabilities.secrets)
+        insert_usage_settlement(
+            writer, configuration, assignment, reservation.attempt, result
+        )

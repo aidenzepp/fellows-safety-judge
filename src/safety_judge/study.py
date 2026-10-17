@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from safety_judge.analysis import SupportScreen, create_pre_call_support_screen
-from safety_judge.artifacts import RunManifest, create_artifact_digest
+from safety_judge.artifacts import ArtifactDigest, RunManifest, create_artifact_digest
 from safety_judge.budget import ArmCap, BudgetPlan, FundingCommitment, TokenPrice
 from safety_judge.coin_flip import EligibleResponse, SourceAudit, SourceManifest
 from safety_judge.errors import InvalidValueError
@@ -14,7 +14,9 @@ from safety_judge.judging import FrozenRubric, JudgeRole, create_judge_request
 from safety_judge.model_access import (
     GenerationParameters,
     ModelRoute,
+    OutputMode,
     create_model_route,
+    create_ordinal_response_format,
 )
 from safety_judge.review import PilotSelection
 
@@ -71,6 +73,28 @@ class RunAssignment(BaseModel, frozen=True, extra="forbid"):
     maximum_input_tokens: Annotated[int, Field(ge=0, strict=True)] | None
 
 
+class MainExecutionPolicy(BaseModel, frozen=True, extra="forbid"):
+    """Frozen operational ramp, systemic threshold and honest input scenarios.
+
+    Attributes:
+        initial_rows: Minimum completed logical cells per judge before ramp/guard.
+        initial_workers: Initial global outstanding-request ceiling.
+        initial_provider_limits: Independent HF/DI initial ceilings.
+        steady_workers: Maximum global ceiling after an error-free initial window.
+        steady_provider_limits: Independent HF/DI steady ceilings.
+        projected_input_tokens: Unverified planning inputs, updated by actual means.
+        projection_attempts: Remaining-cost scenario, never retry permission.
+    """
+
+    initial_rows: Annotated[int, Field(ge=20, le=20, strict=True)] = 20
+    initial_workers: Annotated[int, Field(ge=1, le=128, strict=True)]
+    initial_provider_limits: dict[str, Annotated[int, Field(ge=1, le=128, strict=True)]]
+    steady_workers: Annotated[int, Field(ge=1, le=128, strict=True)]
+    steady_provider_limits: dict[str, Annotated[int, Field(ge=1, le=128, strict=True)]]
+    projected_input_tokens: dict[JudgeRole, Annotated[int, Field(ge=0, strict=True)]]
+    projection_attempts: Annotated[int, Field(ge=1, le=2, strict=True)] = 2
+
+
 class StudyConfiguration(BaseModel, frozen=True, extra="forbid"):
     """A secret-free immutable source, presentation, route and budget snapshot.
 
@@ -90,6 +114,9 @@ class StudyConfiguration(BaseModel, frozen=True, extra="forbid"):
         assignments: Complete four-judge matrix in deterministic row order.
         maximum_workers: Bound on outstanding one-attempt network operations.
         maximum_per_provider: Bound on concurrent attempts on each account.
+        output_modes: Explicit all-four formatting freeze; empty historical prompt.
+        main_policy: Explicit controlled-run ramp/projection, absent for old runs.
+        output_schema_sha256: Actual common schema wire hash, absent for old runs.
     """
 
     run: Annotated[str, Field(min_length=1)]
@@ -107,6 +134,16 @@ class StudyConfiguration(BaseModel, frozen=True, extra="forbid"):
     assignments: tuple[RunAssignment, ...]
     maximum_workers: Annotated[int, Field(ge=1, le=128, strict=True)] = 2
     maximum_per_provider: Annotated[int, Field(ge=1, le=128, strict=True)] = 1
+    output_modes: dict[JudgeRole, OutputMode] = Field(
+        default_factory=dict[JudgeRole, OutputMode],
+        exclude_if=lambda modes: not modes,
+    )
+    main_policy: MainExecutionPolicy | None = Field(
+        default=None, exclude_if=lambda policy: policy is None
+    )
+    output_schema_sha256: ArtifactDigest | None = Field(
+        default=None, exclude_if=lambda digest: digest is None
+    )
 
     @model_validator(mode="after")
     def create_validated_matrix(self) -> StudyConfiguration:
@@ -126,6 +163,18 @@ class StudyConfiguration(BaseModel, frozen=True, extra="forbid"):
         )
         if (
             not self.responses
+            or (self.output_modes and set(self.output_modes) != set(JudgeRole))
+            or (
+                self.output_modes
+                and self.output_schema_sha256
+                != create_artifact_digest(
+                    json.dumps(
+                        create_ordinal_response_format("json_schema"),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                )
+            )
             or actual != expected
             or self.support != create_pre_call_support_screen(self.responses)
             or len({item.identifier for item in self.assignments}) != len(actual)

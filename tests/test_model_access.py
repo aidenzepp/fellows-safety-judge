@@ -22,8 +22,10 @@ from safety_judge.model_access import (
     create_http_request,
     create_judge_http_request,
     create_model_route,
+    create_ordinal_response_format,
     create_provider_api_key,
     create_provider_observation,
+    create_unsupported_output_mode,
     select_http_response,
     select_model_attempt,
 )
@@ -473,3 +475,65 @@ def test_simulated_rendering_never_constructs_environment_settings(
         parameters=parameters,
     )
     assert rendered.api_key.get_secret_value() == "synthetic-offline-only"
+
+
+@pytest.mark.parametrize("role", list(JudgeRole))
+def test_same_strict_schema_is_added_without_changing_judge_visible_messages(
+    role: JudgeRole, api_key: SecretStr, parameters: GenerationParameters
+) -> None:
+    messages = (JudgeMessage(role="user", content="Frozen visible JSON instruction"),)
+    request = create_http_request(
+        route=create_model_route(role),
+        messages=messages,
+        api_key=api_key,
+        parameters=parameters,
+        output_mode="json_schema",
+    )
+    payload = json.loads(request.body)
+    assert payload["messages"] == [item.model_dump() for item in messages]
+    assert payload["response_format"] == create_ordinal_response_format("json_schema")
+    schema = payload["response_format"]["json_schema"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["ordinal"]
+    assert schema["properties"]["ordinal"]["type"] == "integer"
+    assert schema["properties"]["ordinal"]["minimum"] == 1
+    assert schema["properties"]["ordinal"]["maximum"] == 5
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "expected"),
+    [
+        (
+            400,
+            {"error": {"message": "json_schema is not supported by this model"}},
+            True,
+        ),
+        (422, {"error": {"message": "Unsupported response_format: json_object"}}, True),
+        (400, {"error": {"message": "Cold model unavailable"}}, False),
+        (
+            400,
+            {"error": {"message": "unsupported keyword minimum in json_schema"}},
+            False,
+        ),
+        (400, {"error": {"message": "Invalid schema for json_schema"}}, False),
+        (
+            400,
+            {
+                "error": {"message": "unsupported image format"},
+                "response_format": "json_schema",
+            },
+            False,
+        ),
+        (402, {"error": {"message": "json_schema is not supported"}}, False),
+        (200, {"error": {"message": "json_schema is not supported"}}, False),
+    ],
+)
+def test_mode_fallback_requires_explicit_format_type_rejection(
+    status: int, payload: dict[str, object], *, expected: bool
+) -> None:
+    assert (
+        create_unsupported_output_mode(
+            HttpResponse(status=status, body=json.dumps(payload).encode())
+        )
+        is expected
+    )
