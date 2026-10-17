@@ -113,7 +113,7 @@ Include all four main routes (N each), 40 rewrites, 40 model pair reviews, and f
 
 The $30 ceiling counts experiment-attributable costs. Each account funding record explicitly separates:
 
-- `existing_credit`: credit acquired outside this experiment; unused balance is excluded, while experiment usage paid from it counts at the frozen rates. Null means unknown.
+- `existing_credit`: general account balance explicitly excluded by the operator from experiment purchase costs; experiment usage paid from it counts at frozen rates. Null means unknown. This field never silently excludes a new purchase.
 - `committed`: gross new experiment purchases, including their fees/taxes; the entire purchase counts even when partly unused. Null means unknown.
 - `usable_credit`: remaining credit from those counted new purchases only. It cannot exceed `committed` or include existing credit.
 

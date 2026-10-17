@@ -7,13 +7,14 @@ intents and raw evidence are durable before dispatch and parsing respectively.
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from typing import Final
+from typing import Annotated, Final
 lazy from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 from safety_judge.analysis import SavedJudgment, create_pre_call_support_screen
 from safety_judge.artifacts import (
+    ArtifactDigest,
     ArtifactWriter,
     AttemptIntent,
     RawResponseEvent,
@@ -42,9 +43,59 @@ from safety_judge.model_access import (
     create_provider_observation,
     select_model_attempt,
 )
-from safety_judge.study import RunAssignment, StudyConfiguration, create_run_manifest
+from safety_judge.study import (
+    RunAssignment,
+    StudyConfiguration,
+    create_configuration_digest,
+    create_run_manifest,
+)
 lazy from safety_judge.coin_flip import EligibleResponse
 lazy from safety_judge.settings import ApplicationSettings
+
+SMOKE_ARM_CAPS: Final = (
+    ("G1", 10_000),
+    ("G27", 40_000),
+    ("L8", 20_000),
+    ("Q32", 30_000),
+)
+"""Fixed microdollar smoke subcaps, contained within the unchanged main arms."""
+
+SMOKE_CONTEXT_INPUTS: Final = (
+    ("G1", 32_768),
+    ("G27", 131_072),
+    ("L8", 131_072),
+    ("Q32", 40_960),
+)
+"""Full advertised input contexts reserved before each bounded probe attempt."""
+
+SMOKE_TOTAL_CAP: Final = 100_000
+"""The absolute ten-cent bound on all smoke attempt liabilities."""
+
+SMOKE_MAXIMUM_ATTEMPTS: Final = 2
+"""One initial attempt and one certified non-delivery retry per assignment."""
+
+SMOKE_OUTPUT_TOKENS: Final = 2048
+"""Frozen output reservation for the operator-approved probe."""
+
+SMOKE_TIMEOUT_SECONDS: Final = 120
+"""Frozen per-request timeout for the operator-approved probe."""
+
+
+class SmokeAuthorization(BaseModel, frozen=True, extra="forbid"):
+    """Explicit first-row probe authority, distinct from permission for the main run.
+
+    Attributes:
+        confirmed: Whether the exact bounded execution was explicitly admitted.
+        reference: Durable operator/internal admission evidence reference.
+        configuration_sha256: Full source/matrix/configuration freeze being probed.
+        assignment_identifiers: Exactly the first original and four roster judges.
+    """
+
+    confirmed: Annotated[bool, Field(strict=True)]
+    reference: Annotated[str, Field(min_length=1)]
+    configuration_sha256: ArtifactDigest
+    assignment_identifiers: tuple[str, ...]
+
 
 MAXIMUM_CONSECUTIVE_TRANSPORT_FAILURES: Final = 10
 """The frozen stop threshold; a completed in-flight batch cannot unlatch it."""
@@ -356,13 +407,142 @@ def create_provider_batch(
     return batch
 
 
+def create_smoke_admission(
+    state: ReplayState,
+    reservations: tuple[CallReservation, ...],
+    scope: SmokeAuthorization,
+) -> None:
+    """Enforce smoke subcaps and attempt limits against all previous liabilities.
+
+    Args:
+        state: Durable full-manifest checkpoint with prior attempts and settlements.
+        reservations: Complete next four-judge batch or certified retry subset.
+        scope: Frozen first-row authorization and assignment allowlist.
+
+    Raises:
+        InvalidValueError: If a request escapes the four IDs, two-attempt limits,
+            fixed arm subcaps, or absolute ten-cent smoke bound.
+    """
+    previous = {item.attempt: item.actual_cost for item in state.ledger.settlements}
+    totals: dict[str, int] = {}
+    attempts: dict[str, int] = {}
+    for item in (*state.ledger.reservations, *reservations):
+        assignment = item.attempt.rsplit(":attempt:", 1)[0]
+        if assignment not in scope.assignment_identifiers:
+            message = (
+                "Smoke journal contains another assignment; reconcile without dispatch."
+            )
+            raise InvalidValueError(message)
+        attempts[assignment] = attempts.get(assignment, 0) + 1
+        totals[item.arm] = totals.get(item.arm, 0) + previous.get(
+            item.attempt, item.maximum_cost
+        )
+    caps = dict(SMOKE_ARM_CAPS)
+    if (
+        any(count > SMOKE_MAXIMUM_ATTEMPTS for count in attempts.values())
+        or any(arm not in caps or amount > caps[arm] for arm, amount in totals.items())
+        or sum(totals.values()) > SMOKE_TOTAL_CAP
+    ):
+        message = "Smoke attempts or monetary subcap exceeded; stop and reconcile."
+        raise InvalidValueError(message)
+
+
+def create_smoke_ready(
+    configuration: StudyConfiguration,
+    scope: SmokeAuthorization,
+) -> None:
+    """Validate probe-only authority without claiming full main-runtime clearance.
+
+    Args:
+        configuration: Full accepted source, support, and unshrunk assignment matrix.
+        scope: Explicit admitted first-original/four-judge probe freeze.
+
+    Raises:
+        InvalidValueError: If source, funding, rates, controls or scope differ.
+    """
+    assignments = configuration.assignments[: len(SMOKE_ARM_CAPS)]
+    controls = configuration.parameters
+    if not (
+        scope.confirmed
+        and scope.configuration_sha256 == create_configuration_digest(configuration)
+        and scope.assignment_identifiers
+        == tuple(item.identifier for item in assignments)
+        and configuration.execution_mode == "live"
+        and not configuration.gates.execution_confirmed
+        and configuration.gates.source_confirmed
+        and configuration.gates.rates_confirmed
+        and configuration.gates.funding_confirmed
+        and configuration.budget.confirmed
+        and all(price.confirmed for price in configuration.prices.values())
+        and create_pre_call_support_screen(configuration.responses).passed
+        and controls.maximum_output_tokens == SMOKE_OUTPUT_TOKENS
+        and controls.temperature == 0
+        and controls.timeout_seconds == SMOKE_TIMEOUT_SECONDS
+        and configuration.maximum_workers == 1
+        and configuration.maximum_per_provider == 1
+        and tuple((item.judge.value, item.maximum_input_tokens) for item in assignments)
+        == SMOKE_CONTEXT_INPUTS
+    ):
+        message = "Smoke authority or controls differ; reconcile before dispatch."
+        raise InvalidValueError(message)
+
+
+def select_first_row_smoke(
+    configuration: StudyConfiguration,
+    journal: Path,
+    settings: ApplicationSettings,
+    transport: HttpTransport,
+    scope: SmokeAuthorization,
+) -> ReplayState:
+    """Dispatch only the first original's four fixed judges, retaining full evidence.
+
+    Main execution stays unauthorized. Reuse of these paid original outcomes in a
+    later main freeze requires explicit configuration/liability reconciliation.
+    No HTTP refusal, billing error, timeout or uncertain delivery is retried.
+
+    Args:
+        configuration: Complete frozen source and matrix with main execution closed.
+        journal: Explicit durable journal, reusable without repeating occupied cells.
+        settings: Parsed credentials, never logged or serialized.
+        transport: Explicit existing single-attempt transport or deterministic fake.
+        scope: Exactly admitted first-row identities and configuration digest.
+
+    Returns:
+        Full manifest after at most two certified attempts per first-row cell.
+
+    Admission failures propagate as InvalidValueError before any model call.
+    """
+    create_smoke_ready(configuration, scope)
+    return _select_run(configuration, journal, settings, transport, scope)
+
+
+def _create_dispatch_admission(
+    writer: ArtifactWriter,
+    reservations: tuple[CallReservation, ...],
+    scope: SmokeAuthorization | None,
+) -> None:
+    """Check optional probe limits and the unchanged global ledger before dispatch.
+
+    Args:
+        writer: Exclusive journal owner with all existing liabilities.
+        reservations: Complete next batch, or empty for checkpoint validation.
+        scope: Explicit bounded probe authorization, absent for a complete run.
+
+    Admission failures propagate before any transport receives the batch.
+    """
+    if scope is not None:
+        create_smoke_admission(writer.create_snapshot(), reservations, scope)
+    _ = writer.create_admitted_reservations(reservations)
+
+
 def _select_run(
     configuration: StudyConfiguration,
     journal: Path,
     settings: ApplicationSettings | None,
     transport: HttpTransport,
+    scope: SmokeAuthorization | None = None,
 ) -> ReplayState:
-    """Execute the complete matrix through an explicitly injected single-attempt edge.
+    """Execute an admitted matrix or its bounded probe through an injected edge.
 
     The writer lock spans this run. Main-thread persistence owns all mutations;
     workers hold only already-reserved requests. Each account has a bounded batch
@@ -375,10 +555,16 @@ def _select_run(
         journal: Explicit append-only destination; existing manifests must match.
         settings: Parsed credentials; never serialized into the frozen snapshot.
         transport: Required one-attempt capability; there is no live default.
+        scope: First-row probe authority; absent only for an admitted complete run.
 
     Returns:
         Final snapshot retaining every outstanding monetary liability.
     """
+    assignments = (
+        configuration.assignments
+        if scope is None
+        else configuration.assignments[: len(SMOKE_ARM_CAPS)]
+    )
     secrets = tuple(
         secret
         for secret in (
@@ -393,18 +579,15 @@ def _select_run(
     ) as writer:
         _insert_resumed_terminals(writer)
         initial_state = writer.create_snapshot()
+        _create_dispatch_admission(writer, (), scope)
         next_attempts = _create_resumable_attempts(initial_state)
         failures, stopped = create_transport_failure_state(initial_state)
         responses = {row.identifier: row for row in configuration.responses}
         with ThreadPoolExecutor(max_workers=configuration.maximum_workers) as executor:
-            for index in range(
-                0, len(configuration.assignments), 4 * configuration.maximum_workers
-            ):
+            for index in range(0, len(assignments), 4 * configuration.maximum_workers):
                 if stopped:
                     break
-                row = configuration.assignments[
-                    index : index + 4 * configuration.maximum_workers
-                ]
+                row = assignments[index : index + 4 * configuration.maximum_workers]
                 for _retry_pass in range(2):
                     if stopped:
                         break
@@ -436,7 +619,7 @@ def _select_run(
                         )
                         for item, number in pending
                     )
-                    _ = writer.create_admitted_reservations(reservations)
+                    _create_dispatch_admission(writer, reservations, scope)
                     for (item, _), reservation, request in zip(
                         pending, reservations, requests, strict=True
                     ):

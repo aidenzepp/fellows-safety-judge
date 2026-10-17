@@ -30,13 +30,21 @@ from safety_judge.model_access import (
     TransportFailure,
     create_model_route,
 )
-from safety_judge.runs import create_saved_judgments, select_run, select_simulated_run
+from safety_judge.runs import (
+    SMOKE_CONTEXT_INPUTS,
+    SmokeAuthorization,
+    create_saved_judgments,
+    select_first_row_smoke,
+    select_run,
+    select_simulated_run,
+)
 from safety_judge.settings import ApplicationSettings
 from safety_judge.study import (
     ExecutionGates,
     RunAssignment,
     StudyConfiguration,
     create_budget_draft,
+    create_configuration_digest,
     create_run_manifest,
     create_simulated_configuration,
 )
@@ -146,6 +154,193 @@ def create_response(request: HttpRequest) -> HttpResponse:
             }
         ).encode(),
     )
+
+
+def create_smoke_configuration() -> StudyConfiguration:
+    configuration = create_configuration()
+    rates = ((40_000, 80_000), (80_000, 160_000), (20_000, 40_000), (80_000, 280_000))
+    bounds = dict(SMOKE_CONTEXT_INPUTS)
+    return configuration.model_copy(
+        update={
+            "parameters": GenerationParameters(
+                maximum_output_tokens=2048, temperature=0, timeout_seconds=120
+            ),
+            "gates": ExecutionGates(
+                source_confirmed=True, rates_confirmed=True, funding_confirmed=True
+            ),
+            "maximum_workers": 1,
+            "maximum_per_provider": 1,
+            "prices": {
+                role: TokenPrice(
+                    account=create_model_route(role).provider,
+                    confirmed=True,
+                    input_per_million=input_rate,
+                    output_per_million=output_rate,
+                )
+                for role, (input_rate, output_rate) in zip(
+                    JudgeRole, rates, strict=True
+                )
+            },
+            "assignments": tuple(
+                assignment.model_copy(
+                    update={
+                        "maximum_input_tokens": bounds[assignment.judge.value]
+                        if index < len(bounds)
+                        else None
+                    }
+                )
+                for index, assignment in enumerate(configuration.assignments)
+            ),
+        }
+    )
+
+
+def create_smoke_authorization(configuration: StudyConfiguration) -> SmokeAuthorization:
+    return SmokeAuthorization(
+        confirmed=True,
+        reference="explicit-test-probe-authority",
+        configuration_sha256=create_configuration_digest(configuration),
+        assignment_identifiers=tuple(
+            item.identifier for item in configuration.assignments[:4]
+        ),
+    )
+
+
+def test_smoke_sends_only_four_cells_preserves_full_manifest_and_never_repeats(
+    tmp_path: Path, settings: ApplicationSettings
+) -> None:
+    configuration = create_smoke_configuration()
+    scope = create_smoke_authorization(configuration)
+    calls: list[HttpRequest] = []
+
+    def select_recorded_response(request: HttpRequest) -> HttpResponse:
+        calls.append(request)
+        return create_response(request)
+
+    journal = tmp_path / "smoke.jsonl"
+    state = select_first_row_smoke(
+        configuration, journal, settings, select_recorded_response, scope
+    )
+    assert len(calls) == 4
+    assert state.manifest == create_run_manifest(configuration)
+    assert len(configuration.assignments) == 128
+    assert len(state.ledger.settlements) == 4
+    assert (
+        select_first_row_smoke(
+            configuration, journal, settings, select_recorded_response, scope
+        )
+        == state
+    )
+    assert len(calls) == 4
+    with pytest.raises(InvalidValueError):
+        _ = select_run(configuration, journal, settings, select_recorded_response)
+    assert len(calls) == 4
+
+
+@pytest.mark.parametrize("change", ["unconfirmed", "foreign-cells", "changed-freeze"])
+def test_smoke_rejects_changed_authority_before_any_send(
+    tmp_path: Path, settings: ApplicationSettings, change: str
+) -> None:
+    configuration = create_smoke_configuration()
+    scope = create_smoke_authorization(configuration)
+    updates: dict[str, dict[str, object]] = {
+        "unconfirmed": {"confirmed": False},
+        "foreign-cells": {"assignment_identifiers": ("another-row",)},
+        "changed-freeze": {"configuration_sha256": "b" * 64},
+    }
+    scope = scope.model_copy(update=updates[change])
+    calls: list[HttpRequest] = []
+
+    def select_recorded_response(request: HttpRequest) -> HttpResponse:
+        calls.append(request)
+        return create_response(request)
+
+    with pytest.raises(InvalidValueError):
+        _ = select_first_row_smoke(
+            configuration,
+            tmp_path / "smoke.jsonl",
+            settings,
+            select_recorded_response,
+            scope,
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_calls"),
+    [
+        (HttpResponse(status=402, body=b'{"error":"billing"}'), 4),
+        (TransportFailure(reason="network", delivery="unknown"), 4),
+        (TransportFailure(reason="network", delivery="not_delivered"), 8),
+    ],
+    ids=["billing-never-retry", "unknown-never-retry", "certified-retry-only-once"],
+)
+def test_smoke_failure_and_retry_paths_stay_inside_four_cells_and_subcaps(
+    tmp_path: Path,
+    settings: ApplicationSettings,
+    result: HttpResult,
+    expected_calls: int,
+) -> None:
+    configuration = create_smoke_configuration()
+    scope = create_smoke_authorization(configuration)
+    calls: list[HttpRequest] = []
+
+    def select_failure(request: HttpRequest) -> HttpResult:
+        calls.append(request)
+        return result
+
+    journal = tmp_path / "smoke.jsonl"
+    state = select_first_row_smoke(
+        configuration, journal, settings, select_failure, scope
+    )
+    assert len(calls) == expected_calls
+    assert sum(item.maximum_cost for item in state.ledger.reservations) <= 100_000
+    assert len(state.ledger.settlements) == 0
+    assert (
+        select_first_row_smoke(configuration, journal, settings, select_failure, scope)
+        == state
+    )
+    assert len(calls) == expected_calls
+
+
+def test_smoke_rejects_previous_liability_over_its_subcap_before_dispatch(
+    tmp_path: Path, settings: ApplicationSettings
+) -> None:
+    configuration = create_smoke_configuration()
+    journal = tmp_path / "smoke.jsonl"
+    assignment = configuration.assignments[0]
+    reservation = create_call_reservation(
+        attempt=assignment.identifier + ":attempt:1",
+        arm="G1",
+        price=configuration.prices[assignment.judge],
+        maximum_input_tokens=300_000,
+        maximum_output_tokens=2048,
+    )
+    with select_artifact_writer(
+        journal, create_run_manifest(configuration), secrets=()
+    ) as writer:
+        writer.insert_event(
+            AttemptIntent(
+                assignment=assignment.identifier,
+                reservation=reservation,
+                request_sha256="a" * 64,
+            )
+        )
+    calls: list[HttpRequest] = []
+
+    def select_recorded_response(request: HttpRequest) -> HttpResponse:
+        calls.append(request)
+        return create_response(request)
+
+    with pytest.raises(InvalidValueError, match="subcap"):
+        _ = select_first_row_smoke(
+            configuration,
+            journal,
+            settings,
+            select_recorded_response,
+            create_smoke_authorization(configuration),
+        )
+    assert calls == []
 
 
 def test_all_four_judges_are_saved_and_resume_makes_no_second_call(

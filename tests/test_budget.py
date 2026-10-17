@@ -369,6 +369,24 @@ def create_attributed_ledger() -> BudgetLedger:
     )
 
 
+def test_operator_excluded_landed_hf_balance_counts_only_experiment_usage() -> None:
+    ledger = create_attributed_ledger()
+    data = ledger.model_dump(mode="json")
+    data["plan"]["funding"][1].update(
+        existing_credit=10_000_000, committed=0, usable_credit=0
+    )
+    ledger = BudgetLedger.model_validate(data)
+    assert create_total_exposure(ledger) == 1_900_000
+    used = create_reserved_ledger(
+        ledger,
+        (
+            create_reservation("DI-call", 20_000_000, arm="DI", account="deepinfra"),
+            create_reservation("HF-call", 1_000_000, arm="HF", account="huggingface"),
+        ),
+    )
+    assert create_total_exposure(used) == 22_900_000
+
+
 def test_existing_credit_excludes_unused_balance_but_counts_usage() -> None:
     ledger = create_attributed_ledger()
     assert create_total_exposure(ledger) == 6_900_000

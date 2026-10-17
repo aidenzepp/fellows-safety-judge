@@ -35,8 +35,8 @@ class ArmCap(BaseModel, frozen=True, extra="forbid"):
 class FundingCommitment(BaseModel, frozen=True, extra="forbid"):
     """One account's existing credit and experiment-attributable purchases.
 
-    Existing credit was acquired outside this experiment: its unused balance is
-    excluded, but experiment usage paid from it counts at the frozen token rates.
+    Existing credit is general balance explicitly excluded by the operator from
+    experiment purchase costs. Usage paid from it counts at frozen token rates.
     ``committed`` includes only new experiment purchases, fees, taxes and renewals.
     Those purchases count fully even if unused. Only credit from these counted
     purchases can offset usage already paid for, never arm caps or other accounts.
@@ -44,7 +44,7 @@ class FundingCommitment(BaseModel, frozen=True, extra="forbid"):
 
     Attributes:
         account: Account whose liability and credit are inseparable.
-        existing_credit: Verified credit acquired outside this experiment, or None.
+        existing_credit: Operator-excluded general account balance, or None.
         committed: New experiment purchase commitments, or None when unknown.
         usable_credit: Remaining credit from those counted experiment purchases.
     """
