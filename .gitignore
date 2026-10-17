@@ -18,5 +18,9 @@ dist/
 # vivi mailspace: local state, never committed
 .vivi/
 
+# Local source data and generated study evidence must never be committed.
+/data/
+/runs/
+
 # OS and editor
 .DS_Store

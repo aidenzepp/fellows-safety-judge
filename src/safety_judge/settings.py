@@ -9,7 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final, override
 
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from safety_judge.errors import ConfigurationError
@@ -53,6 +53,8 @@ class ApplicationSettings(BaseSettings):
             ``SAFETY_JUDGE_RUNTIME_ENVIRONMENT``.
         logging_level: The minimum severity to record; set by
             ``SAFETY_JUDGE_LOGGING_LEVEL``.
+        deepinfra_api_key: Optional DeepInfra credential; absent blocks that host.
+        huggingface_api_key: Optional HF router credential; absent blocks that host.
     """
 
     model_config = SettingsConfigDict(
@@ -64,6 +66,8 @@ class ApplicationSettings(BaseSettings):
 
     runtime_environment: RuntimeEnvironment = RuntimeEnvironment.DEVELOPMENT
     logging_level: LoggingLevel = LoggingLevel.INFO
+    deepinfra_api_key: SecretStr | None = None
+    huggingface_api_key: SecretStr | None = None
 
     @override
     def __init__(

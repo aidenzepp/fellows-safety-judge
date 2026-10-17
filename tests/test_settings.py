@@ -130,3 +130,23 @@ def test_settings_are_immutable() -> None:
 
     with pytest.raises(ValidationError):
         settings.logging_level = LoggingLevel.DEBUG
+
+
+def test_provider_credentials_are_optional_for_offline_work() -> None:
+    settings = select_application_settings(environment_file_path=None)
+    assert settings.deepinfra_api_key is None
+    assert settings.huggingface_api_key is None
+
+
+def test_provider_credentials_load_as_redacted_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SAFETY_JUDGE_DEEPINFRA_API_KEY", "synthetic-di-key")
+    monkeypatch.setenv("SAFETY_JUDGE_HUGGINGFACE_API_KEY", "synthetic-hf-key")
+    settings = select_application_settings(environment_file_path=None)
+    assert settings.deepinfra_api_key is not None
+    assert settings.deepinfra_api_key.get_secret_value() == "synthetic-di-key"
+    assert settings.huggingface_api_key is not None
+    assert settings.huggingface_api_key.get_secret_value() == "synthetic-hf-key"
+    assert "synthetic-di-key" not in settings.model_dump_json()
+    assert "synthetic-hf-key" not in repr(settings)

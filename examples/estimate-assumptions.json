@@ -1,0 +1,245 @@
+{
+  "budget": {
+    "identifier": "approved-30-usd-allocation-v1-unfunded",
+    "confirmed": false,
+    "global_cap": 30000000,
+    "arms": [
+      {
+        "arm": "G1",
+        "cap": 3250000
+      },
+      {
+        "arm": "G27",
+        "cap": 6500000
+      },
+      {
+        "arm": "L8",
+        "cap": 1650000
+      },
+      {
+        "arm": "Q32",
+        "cap": 9750000
+      },
+      {
+        "arm": "paraphraser",
+        "cap": 250000
+      },
+      {
+        "arm": "reviewer",
+        "cap": 6500000
+      },
+      {
+        "arm": "rewritten",
+        "cap": 200000
+      }
+    ],
+    "funding": [
+      {
+        "account": "deepinfra",
+        "committed": null,
+        "usable_credit": 0
+      },
+      {
+        "account": "huggingface",
+        "committed": null,
+        "usable_credit": 0
+      }
+    ],
+    "other_costs": null
+  },
+  "arms": [
+    {
+      "arm": "G1",
+      "route": "google/gemma-3-1b-it:featherless-ai",
+      "stage": "main",
+      "calls": 6555,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 2000,
+      "output_tokens_per_call": 2048,
+      "tokens_verified": false,
+      "price": {
+        "account": "huggingface",
+        "confirmed": false,
+        "input_per_million": 40000,
+        "output_per_million": 80000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    },
+    {
+      "arm": "G27",
+      "route": "google/gemma-3-27b-it",
+      "stage": "main",
+      "calls": 6555,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 2000,
+      "output_tokens_per_call": 2048,
+      "tokens_verified": false,
+      "price": {
+        "account": "deepinfra",
+        "confirmed": false,
+        "input_per_million": 80000,
+        "output_per_million": 160000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    },
+    {
+      "arm": "L8",
+      "route": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+      "stage": "main",
+      "calls": 6555,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 2000,
+      "output_tokens_per_call": 2048,
+      "tokens_verified": false,
+      "price": {
+        "account": "deepinfra",
+        "confirmed": false,
+        "input_per_million": 20000,
+        "output_per_million": 40000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    },
+    {
+      "arm": "Q32",
+      "route": "Qwen/Qwen3-32B",
+      "stage": "main",
+      "calls": 6555,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 2000,
+      "output_tokens_per_call": 2048,
+      "tokens_verified": false,
+      "price": {
+        "account": "deepinfra",
+        "confirmed": false,
+        "input_per_million": 80000,
+        "output_per_million": 280000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    },
+    {
+      "arm": "paraphraser",
+      "route": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+      "stage": "rewrite",
+      "calls": 40,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 16384,
+      "output_tokens_per_call": 8192,
+      "tokens_verified": false,
+      "price": {
+        "account": "deepinfra",
+        "confirmed": false,
+        "input_per_million": 75000,
+        "output_per_million": 200000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    },
+    {
+      "arm": "reviewer",
+      "route": "anthropic/claude-sonnet-4-6",
+      "stage": "review",
+      "calls": 40,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 16384,
+      "output_tokens_per_call": 2048,
+      "tokens_verified": false,
+      "price": {
+        "account": "deepinfra",
+        "confirmed": false,
+        "input_per_million": 3000000,
+        "output_per_million": 15000000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    },
+    {
+      "arm": "rewritten",
+      "route": "google/gemma-3-1b-it:featherless-ai",
+      "stage": "rewritten",
+      "calls": 40,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 2000,
+      "output_tokens_per_call": 2048,
+      "tokens_verified": false,
+      "price": {
+        "account": "huggingface",
+        "confirmed": false,
+        "input_per_million": 40000,
+        "output_per_million": 80000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    },
+    {
+      "arm": "rewritten",
+      "route": "google/gemma-3-27b-it",
+      "stage": "rewritten",
+      "calls": 40,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 2000,
+      "output_tokens_per_call": 2048,
+      "tokens_verified": false,
+      "price": {
+        "account": "deepinfra",
+        "confirmed": false,
+        "input_per_million": 80000,
+        "output_per_million": 160000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    },
+    {
+      "arm": "rewritten",
+      "route": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+      "stage": "rewritten",
+      "calls": 40,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 2000,
+      "output_tokens_per_call": 2048,
+      "tokens_verified": false,
+      "price": {
+        "account": "deepinfra",
+        "confirmed": false,
+        "input_per_million": 20000,
+        "output_per_million": 40000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    },
+    {
+      "arm": "rewritten",
+      "route": "Qwen/Qwen3-32B",
+      "stage": "rewritten",
+      "calls": 40,
+      "attempts_per_call": 2,
+      "input_tokens_per_call": 2000,
+      "output_tokens_per_call": 2048,
+      "tokens_verified": false,
+      "price": {
+        "account": "deepinfra",
+        "confirmed": false,
+        "input_per_million": 80000,
+        "output_per_million": 280000
+      },
+      "mean_latency_seconds": 10.0,
+      "concurrent_calls": 16,
+      "requests_per_minute": null
+    }
+  ],
+  "human_pause_hours": null,
+  "latency_verified": false,
+  "quotas_verified": false
+}
