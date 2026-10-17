@@ -98,7 +98,9 @@ def create_configuration() -> StudyConfiguration:
             global_cap=30_000_000,
             arms=draft.arms,
             funding=tuple(
-                FundingCommitment(account=account, committed=0, usable_credit=0)
+                FundingCommitment(
+                    existing_credit=0, account=account, committed=0, usable_credit=0
+                )
                 for account in ("deepinfra", "huggingface")
             ),
             other_costs=0,

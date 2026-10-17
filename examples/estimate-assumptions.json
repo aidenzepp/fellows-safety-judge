@@ -37,12 +37,14 @@
       {
         "account": "deepinfra",
         "committed": null,
-        "usable_credit": 0
+        "usable_credit": 0,
+        "existing_credit": null
       },
       {
         "account": "huggingface",
         "committed": null,
-        "usable_credit": 0
+        "usable_credit": 0,
+        "existing_credit": null
       }
     ],
     "other_costs": null

@@ -225,7 +225,9 @@ def create_budget_draft() -> BudgetPlan:
             )
         ),
         funding=tuple(
-            FundingCommitment(account=account, committed=None, usable_credit=0)
+            FundingCommitment(
+                existing_credit=None, account=account, committed=None, usable_credit=0
+            )
             for account in ("deepinfra", "huggingface")
         ),
         other_costs=None,
@@ -256,7 +258,9 @@ def create_simulated_configuration(
         global_cap=30_000_000,
         arms=configuration.budget.arms,
         funding=tuple(
-            FundingCommitment(account=name, committed=0, usable_credit=0)
+            FundingCommitment(
+                existing_credit=0, account=name, committed=0, usable_credit=0
+            )
             for name in ("deepinfra", "huggingface")
         ),
         other_costs=0,

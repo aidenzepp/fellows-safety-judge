@@ -88,7 +88,7 @@ Reports retain explicitly supporting raw-row/equal-four weighting sensitivities 
 
 ## Cost and runtime assumptions
 
-`examples/estimate-assumptions.json` is ready for the `estimate` command. It uses the approved $30 allocation and 6,555 eligible originals, with all ten main/H2 route activities represented. Input/output token counts, ten-second latency and concurrency 16 are explicit **SCENARIOS**, not measurements or established quotas. The 8,192-token rewrite output is an illustrative scenario; actual rewrite limits must follow the frozen source-length/context rule. Account commitments and actual fees remain null, confirmation flags remain false, and human review time remains unknown. The example contains no keys and grants no spending or inference authority.
+`examples/estimate-assumptions.json` is ready for the `estimate` command. It uses the approved $30 allocation and 6,555 eligible originals, with all ten main/H2 route activities represented. Input/output token counts, ten-second latency and concurrency 16 are explicit **SCENARIOS**, not measurements or established quotas. The 8,192-token rewrite output is an illustrative scenario; actual rewrite limits must follow the frozen source-length/context rule. Existing-credit balances, new experiment purchase commitments and actual fees remain null, confirmation flags remain false, and human review time remains unknown. The example contains no keys and grants no spending or inference authority.
 
 `estimate` consumes the `EstimateInputs` JSON schema in `safety_judge.estimation`. Supply `budget`, a complete `arms` array, `human_pause_hours` (number or null), `latency_verified` and `quotas_verified`. Each route assumption supplies:
 
@@ -111,7 +111,15 @@ Include all four main routes (N each), 40 rewrites, 40 model pair reviews, and f
 | Fee/tax/FX allowance | 1.90 |
 | All-in ceiling | 30.00 |
 
-The draft preserves unknown actual fees and gross account commitments. Estimates show gross usage, per-arm reservations, known purchase commitments, uncovered usage and all-cost exposure separately. Credits offset only the account that purchased them; prepaid/minimum unused credit still counts against $30. Unknown funding or rates produce unknown feasibility, never zero/free spending. An estimate never enables execution.
+The $30 ceiling counts experiment-attributable costs. Each account funding record explicitly separates:
+
+- `existing_credit`: credit acquired outside this experiment; unused balance is excluded, while experiment usage paid from it counts at the frozen rates. Null means unknown.
+- `committed`: gross new experiment purchases, including their fees/taxes; the entire purchase counts even when partly unused. Null means unknown.
+- `usable_credit`: remaining credit from those counted new purchases only. It cannot exceed `committed` or include existing credit.
+
+For each account, attributable exposure is `committed + max(0, usage - usable_credit)`. Usage includes outstanding worst-case reservations until verified settlement. Existing credit never discounts that usage or expands per-arm caps. For example, $50 of existing DeepInfra credit with no new purchase contributes its experiment usage, not the unused $50. A new $5 Hugging Face purchase contributes the full $5, even if only $1 is consumed. With $20 DeepInfra usage and a retained $1.90 fee allowance, total exposure is $26.90. With the same purchase and allowance, DeepInfra usage above $23.10 breaches $30 even if its arm cap has room.
+
+Count each fee once, either within the gross purchase or as another liability. The draft preserves unknown balances, new purchase commitments and actual fees. Estimates report existing credit, purchase commitments, gross usage, arm caps and attributable exposure separately. Missing attribution fields are rejected; old saved configurations require explicit attribution and liability reconciliation rather than silent migration. Existing reservations and settlements must be carried forward, never discarded. Changed funding facts invalidate resume under the same configuration identity. Unknown funding or rates produce unknown feasibility and block reservations. An estimate never enables execution.
 
 Runtime is parameterized: each route takes approximately `calls * attempts * latency / concurrency`, also constrained by any supplied RPM ceiling. Independent routes take their maximum within each stage; main, rewrite, review and rewritten stages then sum. Shared account quotas, queues and tails can increase duration. Human review pause is separate and unknown unless supplied. At 6,555 calls, 16 concurrent requests and assumed 10/30/60-second latency, one route takes about 1.14/3.41/6.83 hours before retries. These are scenarios, not measurements or guaranteed forecasts. No inference benchmark has been run.
 

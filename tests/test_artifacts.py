@@ -49,7 +49,11 @@ def manifest() -> RunManifest:
             confirmed=True,
             global_cap=30_000_000,
             arms=(ArmCap(arm="main", cap=30_000_000),),
-            funding=(FundingCommitment(account="test", committed=0, usable_credit=0),),
+            funding=(
+                FundingCommitment(
+                    existing_credit=0, account="test", committed=0, usable_credit=0
+                ),
+            ),
             other_costs=0,
         ),
         model_routes=(create_model_route(JudgeRole.GEMMA_ONE),),
@@ -510,7 +514,10 @@ def test_compact_session_exposure_matches_exact_prepaid_credit_accounting(
             **manifest.budget_plan.model_dump(),
             "funding": (
                 FundingCommitment(
-                    account="test", committed=12_000_000, usable_credit=10_000_000
+                    existing_credit=0,
+                    account="test",
+                    committed=12_000_000,
+                    usable_credit=10_000_000,
                 ),
             ),
             "other_costs": 1_000_000,
@@ -655,3 +662,32 @@ def test_actual_journal_replay_refuses_nested_ordinal_coercion(
     ):
         pytest.fail("the saved ordinal was coerced during session replay")
     assert journal.read_bytes() == damaged
+
+
+def test_existing_credit_survives_compact_writer_and_replay_without_discounting_usage(
+    tmp_path: Path,
+    manifest: RunManifest,
+) -> None:
+    funding = FundingCommitment(
+        account="test", existing_credit=50_000_000, committed=0, usable_credit=0
+    )
+    plan = BudgetPlan.model_validate(
+        {**manifest.budget_plan.model_dump(), "funding": (funding,)}
+    )
+    attributed = RunManifest.model_validate(
+        {**manifest.model_dump(), "budget_plan": plan}
+    )
+    path = tmp_path / "existing-credit.jsonl"
+    with select_artifact_writer(path, attributed, secrets=()) as writer:
+        assert create_total_exposure(writer.create_snapshot().ledger) == 0
+        for attempt in ("existing-one", "existing-two", "existing-three"):
+            writer.insert_event(create_intent(attempt))
+        snapshot = writer.create_snapshot()
+        assert create_total_exposure(snapshot.ledger) == 30_000_000
+        with pytest.raises(InvalidValueError, match="cap"):
+            _ = writer.create_admitted_reservations(
+                (create_intent("over-cap").reservation,)
+            )
+    with select_artifact_writer(path, attributed, secrets=()) as writer:
+        assert writer.create_snapshot() == snapshot
+        assert snapshot.ledger.plan.funding[0].existing_credit == 50_000_000

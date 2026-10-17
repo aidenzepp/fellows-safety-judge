@@ -2,7 +2,9 @@
 
 Persist the returned reservation before dispatch. An interrupted or unknown delivery
 retains its entire reservation. Only verified billing evidence can release money.
-All amounts are integer microdollars; provider credit never creates free spending.
+All amounts are integer microdollars. Existing credit pays for usage without
+making that usage free; new experiment purchases count in full, including unused
+credit, without counting purchased-credit consumption twice.
 """
 
 from typing import Annotated, Self
@@ -31,20 +33,24 @@ class ArmCap(BaseModel, frozen=True, extra="forbid"):
 
 
 class FundingCommitment(BaseModel, frozen=True, extra="forbid"):
-    """One account's already committed purchase and matching usable credit.
+    """One account's existing credit and experiment-attributable purchases.
 
-    ``committed`` includes purchase fees, taxes and renewals. Unknown obligations
-    use ``None`` and prevent admission. Credit offsets only this account's usage,
-    never arm caps or another account. Free promotional credits are conservatively
-    excluded: usable credit cannot exceed the counted monetary commitment.
+    Existing credit was acquired outside this experiment: its unused balance is
+    excluded, but experiment usage paid from it counts at the frozen token rates.
+    ``committed`` includes only new experiment purchases, fees, taxes and renewals.
+    Those purchases count fully even if unused. Only credit from these counted
+    purchases can offset usage already paid for, never arm caps or other accounts.
+    Unknown balances or purchase obligations use ``None`` and prevent admission.
 
     Attributes:
         account: Account whose liability and credit are inseparable.
-        committed: Paid/irreversible commitment, or None when unknown.
-        usable_credit: Verified remaining credit allocated to this ledger only.
+        existing_credit: Verified credit acquired outside this experiment, or None.
+        committed: New experiment purchase commitments, or None when unknown.
+        usable_credit: Remaining credit from those counted experiment purchases.
     """
 
     account: BudgetName
+    existing_credit: Microdollars | None
     committed: Microdollars | None
     usable_credit: Microdollars
 
@@ -245,8 +251,30 @@ class BudgetLedger(BaseModel, frozen=True, extra="forbid"):
         return self
 
 
+def create_funding_exposure(funding: FundingCommitment, usage: int) -> int | None:
+    """Count experiment purchases fully and existing-credit usage at its charge.
+
+    Args:
+        funding: Explicit existing-credit and new experiment-purchase attribution.
+        usage: Nonnegative settled charges plus outstanding worst-case liability.
+
+    Returns:
+        Attributable microdollars, or None for an unknown funding fact. Existing
+        credit never offsets usage; counted purchases offset only their own usage.
+
+    Raises:
+        InvalidValueError: If usage is not a nonnegative integer microdollar amount.
+    """
+    if type(usage) is not int or usage < 0:
+        message = "Usage must be nonnegative integer microdollars; correct attribution."
+        raise InvalidValueError(message)
+    if funding.existing_credit is None or funding.committed is None:
+        return None
+    return funding.committed + max(0, usage - funding.usable_credit)
+
+
 def create_total_exposure(ledger: BudgetLedger) -> int | None:
-    """Calculate purchase commitments plus usage not covered by those purchases.
+    """Calculate experiment purchases plus usage not covered by those purchases.
 
     Args:
         ledger: Immutable reservations, settlements and funding commitments.
@@ -259,14 +287,15 @@ def create_total_exposure(ledger: BudgetLedger) -> int | None:
     total = ledger.plan.other_costs
     settlements = {item.attempt: item.actual_cost for item in ledger.settlements}
     for funding in ledger.plan.funding:
-        if funding.committed is None:
-            return None
         usage = sum(
             settlements.get(item.attempt, item.maximum_cost)
             for item in ledger.reservations
             if item.account == funding.account
         )
-        total += funding.committed + max(0, usage - funding.usable_credit)
+        account_exposure = create_funding_exposure(funding, usage)
+        if account_exposure is None:
+            return None
+        total += account_exposure
     return total
 
 

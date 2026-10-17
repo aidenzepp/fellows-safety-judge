@@ -29,7 +29,9 @@ def ledger() -> BudgetLedger:
             global_cap=30_000_000,
             arms=(ArmCap(arm="main", cap=25_000_000), ArmCap(arm="h2", cap=5_000_000)),
             funding=(
-                FundingCommitment(account="provider", committed=0, usable_credit=0),
+                FundingCommitment(
+                    existing_credit=0, account="provider", committed=0, usable_credit=0
+                ),
             ),
             other_costs=0,
         ),
@@ -82,9 +84,14 @@ def test_prepaid_credit_counts_once_and_cannot_cover_another_account(
             **ledger.plan.model_dump(),
             "funding": (
                 FundingCommitment(
-                    account="provider", committed=10_000_000, usable_credit=8_000_000
+                    existing_credit=0,
+                    account="provider",
+                    committed=10_000_000,
+                    usable_credit=8_000_000,
                 ),
-                FundingCommitment(account="reviewer", committed=0, usable_credit=0),
+                FundingCommitment(
+                    existing_credit=0, account="reviewer", committed=0, usable_credit=0
+                ),
             ),
             "other_costs": 2_000_000,
         }
@@ -124,7 +131,9 @@ def test_missing_obligations_or_unconfirmed_plans_never_fund_calls(
         values["other_costs"] = None
     elif unknown == "commitment":
         values["funding"] = (
-            FundingCommitment(account="provider", committed=None, usable_credit=0),
+            FundingCommitment(
+                existing_credit=0, account="provider", committed=None, usable_credit=0
+            ),
         )
     else:
         values["confirmed"] = False
@@ -268,7 +277,9 @@ def test_nested_models_are_immutable_and_unknown_fields_are_forbidden(
 
 def test_credit_must_be_backed_by_counted_commitment() -> None:
     with pytest.raises(InvalidValueError, match="exceeds"):
-        _ = FundingCommitment(account="provider", committed=1, usable_credit=2)
+        _ = FundingCommitment(
+            existing_credit=0, account="provider", committed=1, usable_credit=2
+        )
 
 
 @pytest.mark.parametrize("field", ["arms", "funding"])
@@ -328,3 +339,179 @@ def test_allocated_arms_cannot_exceed_the_global_envelope(
     values["arms"] = (ArmCap(arm="main", cap=30_000_001),)
     with pytest.raises(InvalidValueError, match="allocations"):
         _ = BudgetPlan.model_validate(values)
+
+
+def create_attributed_ledger() -> BudgetLedger:
+    return BudgetLedger(
+        plan=BudgetPlan(
+            identifier="experiment-attribution-v1",
+            confirmed=True,
+            global_cap=30_000_000,
+            arms=(ArmCap(arm="DI", cap=24_820_000), ArmCap(arm="HF", cap=3_280_000)),
+            funding=(
+                FundingCommitment(
+                    account="deepinfra",
+                    existing_credit=50_000_000,
+                    committed=0,
+                    usable_credit=0,
+                ),
+                FundingCommitment(
+                    account="huggingface",
+                    existing_credit=0,
+                    committed=5_000_000,
+                    usable_credit=5_000_000,
+                ),
+            ),
+            other_costs=1_900_000,
+        ),
+        reservations=(),
+        settlements=(),
+    )
+
+
+def test_existing_credit_excludes_unused_balance_but_counts_usage() -> None:
+    ledger = create_attributed_ledger()
+    assert create_total_exposure(ledger) == 6_900_000
+    used = create_reserved_ledger(
+        ledger,
+        (
+            create_reservation("DI-call", 20_000_000, arm="DI", account="deepinfra"),
+            create_reservation("HF-call", 1_000_000, arm="HF", account="huggingface"),
+        ),
+    )
+    assert create_total_exposure(used) == 26_900_000
+    assert used.plan.funding[0].existing_credit == 50_000_000
+    assert BudgetLedger.model_validate_json(used.model_dump_json()) == used
+    settled = create_settled_ledger(
+        used,
+        CallSettlement(
+            attempt="DI-call", actual_cost=18_000_000, evidence="verified-bill"
+        ),
+    )
+    assert create_total_exposure(settled) == 24_900_000
+    assert create_total_exposure(used) == 26_900_000
+
+
+def test_new_purchase_counts_fully_even_when_unused_without_double_counting() -> None:
+    ledger = create_attributed_ledger()
+    assert create_total_exposure(ledger) == 6_900_000
+    used = create_reserved_ledger(
+        ledger,
+        (create_reservation("HF-call", 3_280_000, arm="HF", account="huggingface"),),
+    )
+    assert create_total_exposure(used) == 6_900_000
+    settled = create_settled_ledger(
+        used,
+        CallSettlement(
+            attempt="HF-call", actual_cost=500_000, evidence="verified-hf-bill"
+        ),
+    )
+    assert create_total_exposure(settled) == 6_900_000
+    with pytest.raises(InvalidValueError, match="exceeds"):
+        _ = FundingCommitment(
+            account="huggingface",
+            existing_credit=50_000_000,
+            committed=0,
+            usable_credit=5_000_000,
+        )
+
+
+def test_existing_credit_cannot_expand_the_global_cap_or_ignore_the_fee_reserve() -> (
+    None
+):
+    ledger = create_attributed_ledger()
+    full = create_reserved_ledger(
+        ledger,
+        (create_reservation("DI-call", 23_100_000, arm="DI", account="deepinfra"),),
+    )
+    assert create_total_exposure(full) == 30_000_000
+    with pytest.raises(InvalidValueError, match="global cap"):
+        _ = create_reserved_ledger(
+            full,
+            (create_reservation("one-micro-over", 1, arm="DI", account="deepinfra"),),
+        )
+    assert create_total_exposure(full) == 30_000_000
+
+
+def test_existing_credit_cannot_cover_an_arm_overrun_on_the_new_purchase_account() -> (
+    None
+):
+    ledger = create_attributed_ledger()
+    with pytest.raises(InvalidValueError, match="Arm HF"):
+        _ = create_reserved_ledger(
+            ledger,
+            (
+                create_reservation(
+                    "HF-overrun", 3_280_001, arm="HF", account="huggingface"
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize("unknown", ["existing_credit", "committed"])
+def test_unknown_credit_attribution_keeps_even_zero_cost_reservations_closed(
+    unknown: str,
+) -> None:
+    ledger = create_attributed_ledger()
+    funding = list(ledger.plan.funding)
+    funding[0] = FundingCommitment.model_validate(
+        {**funding[0].model_dump(), unknown: None}
+    )
+    plan = BudgetPlan.model_validate({**ledger.plan.model_dump(), "funding": funding})
+    unknown_ledger = BudgetLedger(plan=plan, reservations=(), settlements=())
+    assert create_total_exposure(unknown_ledger) is None
+    with pytest.raises(InvalidValueError, match="unknown"):
+        _ = create_reserved_ledger(
+            unknown_ledger,
+            (
+                create_reservation(
+                    "unknown-funded-call", 0, arm="DI", account="deepinfra"
+                ),
+            ),
+        )
+
+
+def test_missing_attribution_is_not_silently_inferred_during_saved_model_import() -> (
+    None
+):
+    with pytest.raises(ValidationError, match="existing_credit"):
+        _ = FundingCommitment.model_validate(
+            {"account": "deepinfra", "committed": 0, "usable_credit": 0}
+        )
+
+
+def test_mixed_existing_and_new_credit_counts_purchase_then_only_uncovered_usage() -> (
+    None
+):
+    ledger = create_attributed_ledger()
+    funding = FundingCommitment(
+        account="deepinfra",
+        existing_credit=50_000_000,
+        committed=5_500_000,
+        usable_credit=5_000_000,
+    )
+    plan = BudgetPlan.model_validate(
+        {**ledger.plan.model_dump(), "funding": (funding,), "other_costs": 0}
+    )
+    mixed = BudgetLedger(plan=plan, reservations=(), settlements=())
+    used = create_reserved_ledger(
+        mixed,
+        (create_reservation("mixed-call", 8_000_000, arm="DI", account="deepinfra"),),
+    )
+    assert create_total_exposure(used) == 8_500_000
+    assert create_resumed_ledger(used, used.plan) == used
+    changed = BudgetPlan.model_validate(
+        {
+            **plan.model_dump(),
+            "funding": (
+                FundingCommitment(
+                    account="deepinfra",
+                    existing_credit=49_000_000,
+                    committed=5_500_000,
+                    usable_credit=5_000_000,
+                ),
+            ),
+        }
+    )
+    with pytest.raises(InvalidValueError, match="changed"):
+        _ = create_resumed_ledger(used, changed)

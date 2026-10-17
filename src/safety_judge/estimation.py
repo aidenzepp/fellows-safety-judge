@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from safety_judge.budget import BudgetPlan, TokenPrice
+from safety_judge.budget import BudgetPlan, TokenPrice, create_funding_exposure
 from safety_judge.errors import InvalidValueError
 
 
@@ -90,6 +90,8 @@ class StudyEstimate(BaseModel, frozen=True, extra="forbid"):
         usage_plus_fees: Gross model usage plus all known non-account costs.
         other_costs: Explicit known fees/liabilities, or None when unknown.
         global_cap: Frozen all-cost ceiling in integer microdollars.
+        existing_credit: Declared out-of-experiment balances, never a usage discount.
+        purchase_commitments: New experiment purchases counted fully, or unknown.
         all_cost_exposure: Purchase commitments plus uncovered usage plus fees.
         within_all_caps: None for unknown costs; otherwise all-cost/arm fit.
         stage_hours: Parallel maximum per stage, then stages sum sequentially.
@@ -105,6 +107,8 @@ class StudyEstimate(BaseModel, frozen=True, extra="forbid"):
     usage_plus_fees: int | None
     other_costs: int | None
     global_cap: int
+    existing_credit: dict[str, int | None]
+    purchase_commitments: dict[str, int | None]
     all_cost_exposure: int | None
     within_all_caps: bool | None
     stage_hours: dict[str, float | None]
@@ -192,18 +196,16 @@ def create_study_estimate(inputs: EstimateInputs) -> StudyEstimate:
             for assumption, result in zip(inputs.arms, arms, strict=True)
             if assumption.price.account == funding.account
         )
-        if (
-            exposure is None
-            or funding.committed is None
-            or any(item.gross_usage is None for item in account_items)
-        ):
+        if exposure is None or any(item.gross_usage is None for item in account_items):
             exposure = None
             break
-        exposure += funding.committed + max(
-            0,
-            sum(item.gross_usage or 0 for item in account_items)
-            - funding.usable_credit,
+        account_exposure = create_funding_exposure(
+            funding, sum(item.gross_usage or 0 for item in account_items)
         )
+        if account_exposure is None:
+            exposure = None
+            break
+        exposure += account_exposure
     stages: dict[str, float | None] = {}
     for stage in ("main", "rewrite", "review", "rewritten"):
         members = tuple(
@@ -228,6 +230,12 @@ def create_study_estimate(inputs: EstimateInputs) -> StudyEstimate:
         usage_plus_fees=gross,
         other_costs=inputs.budget.other_costs,
         global_cap=inputs.budget.global_cap,
+        existing_credit={
+            item.account: item.existing_credit for item in inputs.budget.funding
+        },
+        purchase_commitments={
+            item.account: item.committed for item in inputs.budget.funding
+        },
         all_cost_exposure=exposure,
         within_all_caps=None
         if exposure is None or any(value is None for value in arm_usage.values())
