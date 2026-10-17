@@ -26,11 +26,18 @@ from safety_judge.artifacts import (
     create_raw_response_event,
     select_artifact_writer,
 )
-from safety_judge.budget import CallReservation, CallSettlement, create_call_reservation
+from safety_judge.budget import (
+    ArmCap,
+    CallReservation,
+    CallSettlement,
+    create_call_reservation,
+)
 from safety_judge.errors import InvalidValueError
 from safety_judge.judging import (
+    NormalizedTerminalOutcomes,
     UnresolvedJudgment,
     create_judge_request,
+    create_normalized_terminal_outcomes,
     create_terminal_outcome,
 )
 from safety_judge.model_access import (
@@ -89,12 +96,14 @@ class SmokeAuthorization(BaseModel, frozen=True, extra="forbid"):
         reference: Durable operator/internal admission evidence reference.
         configuration_sha256: Full source/matrix/configuration freeze being probed.
         assignment_identifiers: Exactly the first original and four roster judges.
+        prior_arm_exposure: Previous smoke actual costs or retained liabilities.
     """
 
     confirmed: Annotated[bool, Field(strict=True)]
     reference: Annotated[str, Field(min_length=1)]
     configuration_sha256: ArtifactDigest
     assignment_identifiers: tuple[str, ...]
+    prior_arm_exposure: tuple[ArmCap, ...] = ()
 
 
 MAXIMUM_CONSECUTIVE_TRANSPORT_FAILURES: Final = 10
@@ -407,6 +416,41 @@ def create_provider_batch(
     return batch
 
 
+def create_saved_normalized_outcomes(
+    state: ReplayState,
+) -> dict[str, NormalizedTerminalOutcomes]:
+    """Replay paired outcomes without changing raw journals or stored terminals.
+
+    Args:
+        state: Integrity-checked durable intents and credential-redacted raw data.
+
+    Returns:
+        Each intended attempt's raw and normalized outcomes; absent raw is unknown.
+    """
+    unknown = NormalizedTerminalOutcomes(
+        raw=UnresolvedJudgment(reason="unknown"),
+        normalized=UnresolvedJudgment(reason="unknown"),
+    )
+    outcomes: dict[str, NormalizedTerminalOutcomes] = {}
+    for event in state.events:
+        if isinstance(event, AttemptIntent):
+            outcomes[event.reservation.attempt] = unknown
+        elif (
+            isinstance(event, RawResponseEvent)
+            and event.status is not None
+            and not event.redacted
+        ):
+            observation = create_provider_observation(
+                HttpResponse(status=event.status, body=create_raw_body(event))
+            )
+            outcomes[event.attempt] = create_normalized_terminal_outcomes(
+                observation.content,
+                finish=observation.finish,
+                judge_refused=observation.refused,
+            )
+    return outcomes
+
+
 def create_smoke_admission(
     state: ReplayState,
     reservations: tuple[CallReservation, ...],
@@ -424,7 +468,10 @@ def create_smoke_admission(
             fixed arm subcaps, or absolute ten-cent smoke bound.
     """
     previous = {item.attempt: item.actual_cost for item in state.ledger.settlements}
-    totals: dict[str, int] = {}
+    totals = {item.arm: item.cap for item in scope.prior_arm_exposure}
+    if len(totals) != len(scope.prior_arm_exposure):
+        message = "Prior smoke exposure repeats an arm; reconcile before dispatch."
+        raise InvalidValueError(message)
     attempts: dict[str, int] = {}
     for item in (*state.ledger.reservations, *reservations):
         assignment = item.attempt.rsplit(":attempt:", 1)[0]

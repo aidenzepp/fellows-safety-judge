@@ -14,6 +14,7 @@ from safety_judge.artifacts import (
     select_artifact_writer,
 )
 from safety_judge.budget import (
+    ArmCap,
     BudgetPlan,
     FundingCommitment,
     TokenPrice,
@@ -34,6 +35,7 @@ from safety_judge.runs import (
     SMOKE_CONTEXT_INPUTS,
     SmokeAuthorization,
     create_saved_judgments,
+    create_saved_normalized_outcomes,
     select_first_row_smoke,
     select_run,
     select_simulated_run,
@@ -655,3 +657,58 @@ def test_caller_confirmation_cannot_bypass_the_live_source_support_screen(
         )
     assert calls == []
     assert not (tmp_path / "absent.jsonl").exists()
+
+
+def test_repeat_smoke_counts_previous_spend_before_any_new_dispatch(
+    tmp_path: Path, settings: ApplicationSettings
+) -> None:
+    configuration = create_smoke_configuration()
+    scope = create_smoke_authorization(configuration).model_copy(
+        update={"prior_arm_exposure": (ArmCap(arm="G1", cap=9_999),)}
+    )
+    calls: list[HttpRequest] = []
+
+    def select_recorded_response(request: HttpRequest) -> HttpResponse:
+        calls.append(request)
+        return create_response(request)
+
+    with pytest.raises(InvalidValueError, match="subcap"):
+        _ = select_first_row_smoke(
+            configuration,
+            tmp_path / "repeat.jsonl",
+            settings,
+            select_recorded_response,
+            scope,
+        )
+    assert calls == []
+
+
+def test_live_normalized_terminals_keep_paired_raw_failures_and_immutable_journal(
+    tmp_path: Path, settings: ApplicationSettings
+) -> None:
+    configuration = create_smoke_configuration()
+    journal = tmp_path / "raw.jsonl"
+
+    def select_fenced_response(request: HttpRequest) -> HttpResponse:
+        data = json.loads(create_response(request).body)
+        data["choices"][0]["message"]["content"] = '```json\n{"ordinal":3}\n```'
+        return HttpResponse(status=200, body=json.dumps(data).encode())
+
+    state = select_first_row_smoke(
+        configuration,
+        journal,
+        settings,
+        select_fenced_response,
+        create_smoke_authorization(configuration),
+    )
+    before = journal.read_bytes()
+    outcomes = create_saved_normalized_outcomes(state)
+    assert len(outcomes) == 4
+    assert all(item.raw.kind == "unresolved" for item in outcomes.values())
+    assert all(item.normalized.kind == "judgment" for item in outcomes.values())
+    assert journal.read_bytes() == before
+    assert all(
+        event.outcome.kind == "judgment"
+        for event in state.events
+        if isinstance(event, TerminalEvent)
+    )

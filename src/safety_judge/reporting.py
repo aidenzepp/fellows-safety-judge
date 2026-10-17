@@ -30,7 +30,7 @@ from safety_judge.inference import (
     create_h1_decisions,
     select_component_multiplicities,
 )
-from safety_judge.judging import JudgeRole
+from safety_judge.judging import JudgeRole, NormalizedTerminalOutcomes
 from safety_judge.supporting import (
     WeightedAdditiveFit,
     WeightingSensitivity,
@@ -38,6 +38,47 @@ from safety_judge.supporting import (
     create_weighting_sensitivities,
 )
 lazy from safety_judge.coin_flip import EligibleResponse
+
+
+class NormalizationCoverage(BaseModel, frozen=True, extra="forbid"):
+    """Separate format coverage on the identical assigned response denominator.
+
+    Attributes:
+        assigned: Total cells including unresolved or absent responses.
+        raw_valid: Cells accepted by the unchanged raw strict parser.
+        normalized_valid: Cells accepted after the frozen outer-fence rule.
+        raw_rate: Raw validity fraction, absent when no cells were assigned.
+        normalized_rate: Normalized validity fraction with the same denominator.
+    """
+
+    assigned: int
+    raw_valid: int
+    normalized_valid: int
+    raw_rate: float | None
+    normalized_rate: float | None
+
+
+def create_normalization_coverage(
+    outcomes: tuple[NormalizedTerminalOutcomes, ...],
+) -> NormalizationCoverage:
+    """Report both parser coverages without selecting responses by validity.
+
+    Args:
+        outcomes: One predetermined response per cell, including unresolved ones.
+
+    Returns:
+        Raw and normalized counts/rates with the same complete denominator.
+    """
+    raw = sum(item.raw.kind == "judgment" for item in outcomes)
+    normalized = sum(item.normalized.kind == "judgment" for item in outcomes)
+    assigned = len(outcomes)
+    return NormalizationCoverage(
+        assigned=assigned,
+        raw_valid=raw,
+        normalized_valid=normalized,
+        raw_rate=raw / assigned if assigned else None,
+        normalized_rate=normalized / assigned if assigned else None,
+    )
 
 
 class ReportProvenance(BaseModel, frozen=True, extra="forbid"):

@@ -2,8 +2,9 @@
 
 import hashlib
 import json
+import re
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter
 
@@ -117,6 +118,86 @@ class OrdinalPayload(BaseModel, frozen=True, extra="forbid"):
     ordinal: Annotated[int, Field(strict=True, ge=1, le=5)]
 
 
+NORMALIZATION_VERSION: Final = "outer-markdown-fence-v1"
+"""Preregistered single outer backtick-fence removal, without content repair."""
+
+MINIMUM_FENCE_LINES: Final = 2
+"""A complete fence requires separate opening and closing delimiter lines."""
+
+
+class NormalizedTerminalOutcomes(BaseModel, frozen=True, extra="forbid"):
+    """Parallel strict outcomes from the same preserved provider response.
+
+    Attributes:
+        version: Frozen deterministic transformation applied uniformly to judges.
+        raw: Strict outcome before any fence removal.
+        normalized: Strict outcome after exactly one allowed outer-fence removal.
+    """
+
+    version: Literal["outer-markdown-fence-v1"] = NORMALIZATION_VERSION
+    raw: TerminalOutcome
+    normalized: TerminalOutcome
+
+
+def create_normalized_judge_text(raw_text: str) -> str:
+    """Strip surrounding whitespace and at most one complete outer fence.
+
+    The opener has at least three identical backticks or tildes, an optional
+    single tag without whitespace/backticks/tildes, optional horizontal space,
+    and LF or CRLF. Horizontal space may separate the fence and tag. The final
+    line has the same fence character at least as many times and optional
+    horizontal space. Interior characters and line endings remain unchanged.
+    There is no recursive processing, prose extraction or JSON repair.
+
+    Args:
+        raw_text: Exact persisted provider message content, never source text.
+
+    Returns:
+        Stripped text or the unchanged interior of one recognized outer fence.
+    """
+    stripped = raw_text.strip()
+    lines = stripped.splitlines(keepends=True)
+    if len(lines) < MINIMUM_FENCE_LINES:
+        return stripped
+    opening = re.fullmatch(
+        r"(?P<fence>`{3,}|~{3,})[ \t]*(?:[^\s`~]+)?[ \t]*(?:\r\n|\n)", lines[0]
+    )
+    if opening is not None:
+        fence = opening.group("fence")
+        closing = rf"{re.escape(fence[0])}{{{len(fence)},}}[ \t]*"
+        if re.fullmatch(closing, lines[-1]):
+            return "".join(lines[1:-1])
+    return stripped
+
+
+def create_normalized_terminal_outcomes(
+    raw_text: str,
+    *,
+    finish: Literal["complete", "truncated", "unknown"],
+    judge_refused: bool,
+) -> NormalizedTerminalOutcomes:
+    """Apply the frozen rule before the unchanged strict parser on every judge.
+
+    Args:
+        raw_text: Exact provider content, preserved independently by its caller.
+        finish: Observed finish; normalization cannot override truncation/unknown.
+        judge_refused: Observed refusal; normalization cannot override it.
+
+    Returns:
+        Both strict outcomes with the identical finish/refusal precedence.
+    """
+    return NormalizedTerminalOutcomes(
+        raw=create_strict_terminal_outcome(
+            raw_text, finish=finish, judge_refused=judge_refused
+        ),
+        normalized=create_strict_terminal_outcome(
+            create_normalized_judge_text(raw_text),
+            finish=finish,
+            judge_refused=judge_refused,
+        ),
+    )
+
+
 def create_judge_request(
     prompt: str,
     generation: str,
@@ -167,7 +248,7 @@ def create_judge_request(
     )
 
 
-def create_terminal_outcome(
+def create_strict_terminal_outcome(
     raw_text: str,
     *,
     finish: Literal["complete", "truncated", "unknown"],
@@ -217,3 +298,29 @@ def create_unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, obje
         message = "Judge response repeats a JSON key. Preserve it as a parse failure."
         raise InvalidValueError(message)
     return result
+
+
+def create_terminal_outcome(
+    raw_text: str,
+    *,
+    finish: Literal["complete", "truncated", "unknown"],
+    judge_refused: bool,
+) -> TerminalOutcome:
+    """Apply the frozen normalizer before the strict decoder for every judge.
+
+    Raw strict outcomes remain independently derivable with the paired helper;
+    this shared boundary never changes archived raw bytes or prior terminals.
+
+    Args:
+        raw_text: Exact persisted provider content.
+        finish: Explicit finish observation, preserved before parsing.
+        judge_refused: Explicit provider refusal, preserved before parsing.
+
+    Returns:
+        The frozen normalized strict outcome used by newly parsed live attempts.
+    """
+    return create_strict_terminal_outcome(
+        create_normalized_judge_text(raw_text),
+        finish=finish,
+        judge_refused=judge_refused,
+    )

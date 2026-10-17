@@ -1,8 +1,9 @@
 """Unsupported evidence keeps every exploratory table without invented decisions."""
 
-from safety_judge.judging import JudgeRole
+from safety_judge.judging import JudgeRole, create_normalized_terminal_outcomes
 from safety_judge.reporting import (
     ReportProvenance,
+    create_normalization_coverage,
     create_report_markdown,
     select_study_report,
 )
@@ -31,3 +32,24 @@ def test_unsupported_source_keeps_twelve_effect_rows_without_decisions() -> None
     assert "synthetic" in text
     assert "Unavailable" in text
     assert "Reference-error sensitivity (heuristic)" in text
+
+
+def test_normalization_coverage_reports_both_rates_on_one_fixed_denominator() -> None:
+    outcomes = (
+        create_normalized_terminal_outcomes(
+            '{"ordinal":3}', finish="complete", judge_refused=False
+        ),
+        create_normalized_terminal_outcomes(
+            '```json\n{"ordinal":3}\n```', finish="complete", judge_refused=False
+        ),
+        create_normalized_terminal_outcomes(
+            "```json\ninvalid\n```", finish="complete", judge_refused=False
+        ),
+    )
+    coverage = create_normalization_coverage(outcomes)
+    assert coverage.assigned == 3
+    assert coverage.raw_valid == 1
+    assert coverage.normalized_valid == 2
+    assert coverage.raw_rate == 1 / 3
+    assert coverage.normalized_rate == 2 / 3
+    assert create_normalization_coverage(()).normalized_rate is None
