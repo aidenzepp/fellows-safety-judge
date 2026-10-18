@@ -1,0 +1,16 @@
+assumed_error_pct,flips,target,completion_lower_pp,completion_upper_pp,method
+1.0000,66,Delta,-3.3777,-3.2137,Exploratory boundary-error scenario; not an adversarial optimum.
+1.0000,66,G1,-6.4593,-6.2819,Exploratory boundary-error scenario; not an adversarial optimum.
+1.0000,66,G27,-4.6988,-4.5241,Exploratory boundary-error scenario; not an adversarial optimum.
+1.0000,66,L8,2.1059,2.4015,Exploratory boundary-error scenario; not an adversarial optimum.
+1.0000,66,Q32,-6.7688,-6.5306,Exploratory boundary-error scenario; not an adversarial optimum.
+5.0000,328,Delta,-6.4127,-6.2464,Exploratory boundary-error scenario; not an adversarial optimum.
+5.0000,328,G1,-9.3471,-9.1645,Exploratory boundary-error scenario; not an adversarial optimum.
+5.0000,328,G27,-5.9429,-5.7645,Exploratory boundary-error scenario; not an adversarial optimum.
+5.0000,328,L8,-1.2497,-0.9504,Exploratory boundary-error scenario; not an adversarial optimum.
+5.0000,328,Q32,-10.4545,-10.2132,Exploratory boundary-error scenario; not an adversarial optimum.
+10.0000,656,Delta,-7.0035,-6.8417,Exploratory boundary-error scenario; not an adversarial optimum.
+10.0000,656,G1,-9.7929,-9.6151,Exploratory boundary-error scenario; not an adversarial optimum.
+10.0000,656,G27,-6.4336,-6.2599,Exploratory boundary-error scenario; not an adversarial optimum.
+10.0000,656,L8,-1.8715,-1.5762,Exploratory boundary-error scenario; not an adversarial optimum.
+10.0000,656,Q32,-11.1352,-10.9019,Exploratory boundary-error scenario; not an adversarial optimum.

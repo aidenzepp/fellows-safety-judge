@@ -1,0 +1,6 @@
+target,completion_lower_pp,completion_upper_pp,bootstrap_lower_pp,descriptive_upper_pp,raw_p,holm_p,rejected
+Delta,0.4333,0.5971,-2.5837,3.5475,0.9989,not_applicable,False
+G1,-2.0781,-1.9005,-7.3047,3.1576,0.9996,1.0,False
+G27,-1.9045,-1.7300,-6.2636,2.4521,1.0,1.0,False
+L8,5.2735,5.5690,0.7573,10.1111,0.4334,1.0,False
+Q32,-2.0912,-1.8535,-8.8601,4.6513,0.997,1.0,False

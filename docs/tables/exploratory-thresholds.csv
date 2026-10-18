@@ -1,0 +1,13 @@
+judge,benchmark_pp,completion_lower_pp,completion_upper_pp,descriptive_relation,harmful_target_coverage_pct
+G1,3.0000,-2.0781,-1.9005,entirely_at_or_below,99.9178
+G1,5.0000,-2.0781,-1.9005,entirely_at_or_below,99.9178
+G1,10.0000,-2.0781,-1.9005,entirely_at_or_below,99.9178
+G27,3.0000,-1.9045,-1.7300,entirely_at_or_below,99.9178
+G27,5.0000,-1.9045,-1.7300,entirely_at_or_below,99.9178
+G27,10.0000,-1.9045,-1.7300,entirely_at_or_below,99.9178
+L8,3.0000,5.2735,5.5690,entirely_above,99.9178
+L8,5.0000,5.2735,5.5690,entirely_above,99.9178
+L8,10.0000,5.2735,5.5690,entirely_at_or_below,99.9178
+Q32,3.0000,-2.0912,-1.8535,entirely_at_or_below,99.9178
+Q32,5.0000,-2.0912,-1.8535,entirely_at_or_below,99.9178
+Q32,10.0000,-2.0912,-1.8535,entirely_at_or_below,99.9178

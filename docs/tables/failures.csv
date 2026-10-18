@@ -1,0 +1,5 @@
+judge,assigned,failures,failure_pct,raw_valid,normalized_valid,format_failures
+G1,6555,6,0.0915,6549,6549,0
+G27,6555,4,0.0610,6551,6551,0
+L8,6555,4,0.0610,6551,6551,0
+Q32,6555,10,0.1526,6545,6545,0
